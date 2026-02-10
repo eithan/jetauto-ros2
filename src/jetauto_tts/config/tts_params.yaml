@@ -1,0 +1,17 @@
+tts_node:
+  ros__parameters:
+    # --- Detection input ---
+    detection_topic: "/detected_objects"
+
+    # --- TTS engine ---
+    engine: "pyttsx3"                  # "pyttsx3" (offline) — extensible later
+    rate: 150                          # words per minute
+    volume: 0.9                        # 0.0 to 1.0
+    voice_id: ""                       # empty = system default; set to specific voice ID
+
+    # --- Behavior ---
+    cooldown: 5.0                      # seconds between announcements (avoid spam)
+    min_confidence: 0.6                # only announce objects above this confidence
+    max_objects_per_announcement: 5    # cap objects mentioned in one sentence
+    announce_new_only: true            # only speak when new objects appear
+    greeting: "I can see"              # prefix for announcements ("I can see a cup and a laptop")

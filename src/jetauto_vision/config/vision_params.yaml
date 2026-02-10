@@ -1,0 +1,18 @@
+detector_node:
+  ros__parameters:
+    # --- Model ---
+    model_name: "yolov8n.pt"          # yolov8n (fast) / yolov8s / yolov8m (accurate)
+    confidence_threshold: 0.5          # min confidence to publish [0.0-1.0]
+    device: "0"                        # "0" = first GPU, "cpu" = CPU-only
+
+    # --- Camera ---
+    image_topic: "/camera/color/image_raw"
+    image_encoding: "bgr8"            # bgr8 or rgb8
+
+    # --- Performance ---
+    inference_interval: 0.2            # seconds between inferences (5 FPS)
+    max_detections: 10                 # cap detections per frame
+
+    # --- Output ---
+    publish_annotated_image: true      # publish image with bounding boxes
+    annotated_image_topic: "/detected_objects/image"
