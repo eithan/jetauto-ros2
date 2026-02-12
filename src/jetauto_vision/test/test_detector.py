@@ -1,6 +1,5 @@
 """Unit tests for the detector node."""
 
-import json
 import pytest
 
 
@@ -9,11 +8,6 @@ class TestDetectorNodeHelpers:
 
     def test_parse_empty_results(self):
         """Empty YOLO results should return an empty list."""
-        from jetauto_vision.detector_node import DetectorNode
-
-        # We can't instantiate a LifecycleNode without rclpy, so test
-        # the static/class-level logic separately. For parse_results,
-        # we verify the contract: None/empty input -> empty list.
         assert _parse_results_standalone(None) == []
         assert _parse_results_standalone([]) == []
 
