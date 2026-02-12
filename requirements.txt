@@ -1,0 +1,15 @@
+# JetAuto ROS2 — Python dependencies
+# Install with: pip3 install -r requirements.txt
+
+# Vision
+ultralytics>=8.0.0          # YOLOv8 inference
+opencv-python-headless>=4.5 # Image processing (headless for robot)
+
+# TTS
+pyttsx3>=2.90               # Offline text-to-speech
+
+# ROS2 (installed via apt, listed here for reference)
+# rclpy
+# sensor_msgs
+# std_msgs
+# cv_bridge

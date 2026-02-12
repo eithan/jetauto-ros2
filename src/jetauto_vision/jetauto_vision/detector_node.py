@@ -2,30 +2,32 @@
 Object detection node using YOLOv8 (ultralytics).
 
 Subscribes to a camera image topic, runs inference, and publishes
-detected objects as JSON on /detected_objects.
+detected objects as DetectedObjectArray on /detected_objects.
 
 Optionally publishes an annotated image with bounding boxes.
+
+Supports ROS2 lifecycle management for clean startup/shutdown.
 """
 
-import json
 import time
 
-import cv2
 import numpy as np
 import rclpy
-from rclpy.node import Node
+from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
 from sensor_msgs.msg import Image
-from std_msgs.msg import String
+from std_msgs.msg import Header
 from cv_bridge import CvBridge
 
+from jetauto_msgs.msg import DetectedObject, DetectedObjectArray
 
-class DetectorNode(Node):
-    """ROS2 node for real-time object detection via YOLOv8."""
+
+class DetectorNode(LifecycleNode):
+    """ROS2 lifecycle node for real-time object detection via YOLOv8."""
 
     def __init__(self):
         super().__init__('detector_node')
 
-        # -- Declare parameters --
+        # -- Declare parameters (available before configure) --
         self.declare_parameter('model_name', 'yolov8n.pt')
         self.declare_parameter('confidence_threshold', 0.5)
         self.declare_parameter('device', '0')
@@ -36,7 +38,81 @@ class DetectorNode(Node):
         self.declare_parameter('publish_annotated_image', True)
         self.declare_parameter('annotated_image_topic', '/detected_objects/image')
 
-        # -- Read parameters --
+        # -- Internal state --
+        self.model = None
+        self.bridge = CvBridge()
+        self.last_inference_time = 0.0
+        self.sub_image = None
+        self.pub_detections = None
+        self.pub_annotated = None
+
+        self.get_logger().info('DetectorNode created (inactive — waiting for configure)')
+
+    # ------------------------------------------------------------------ #
+    # Lifecycle callbacks
+    # ------------------------------------------------------------------ #
+
+    def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Load parameters and YOLO model."""
+        self._read_parameters()
+
+        if not self._load_model():
+            return TransitionCallbackReturn.FAILURE
+
+        self.pub_detections = self.create_publisher(
+            DetectedObjectArray, '/detected_objects', 10
+        )
+        if self.publish_annotated:
+            self.pub_annotated = self.create_publisher(
+                Image, self.annotated_topic, 10
+            )
+
+        self.get_logger().info(
+            f'Configured — model={self.model_name}, conf={self.conf_threshold}, '
+            f'device={self.device}, topic={self.image_topic}'
+        )
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Create the image subscription and start processing."""
+        self.sub_image = self.create_subscription(
+            Image, self.image_topic, self._image_callback, 10
+        )
+        self.get_logger().info('Activated — listening for images')
+        return super().on_activate(state)
+
+    def on_deactivate(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Stop processing images."""
+        if self.sub_image is not None:
+            self.destroy_subscription(self.sub_image)
+            self.sub_image = None
+        self.get_logger().info('Deactivated — stopped listening')
+        return super().on_deactivate(state)
+
+    def on_cleanup(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Release model and publishers."""
+        self.model = None
+        if self.pub_detections is not None:
+            self.destroy_publisher(self.pub_detections)
+            self.pub_detections = None
+        if self.pub_annotated is not None:
+            self.destroy_publisher(self.pub_annotated)
+            self.pub_annotated = None
+        self.get_logger().info('Cleaned up')
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_shutdown(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Final shutdown."""
+        self.model = None
+        self.get_logger().info('Shut down')
+        return TransitionCallbackReturn.SUCCESS
+
+    # ------------------------------------------------------------------ #
+    # Parameters
+    # ------------------------------------------------------------------ #
+
+    def _read_parameters(self):
+        """Read all parameters into instance variables."""
         self.model_name = self.get_parameter('model_name').value
         self.conf_threshold = self.get_parameter('confidence_threshold').value
         self.device = self.get_parameter('device').value
@@ -47,49 +123,28 @@ class DetectorNode(Node):
         self.publish_annotated = self.get_parameter('publish_annotated_image').value
         self.annotated_topic = self.get_parameter('annotated_image_topic').value
 
-        # -- Load YOLO model (deferred import so node starts even if ultralytics missing) --
-        self.model = None
-        self._load_model()
-
-        # -- ROS2 plumbing --
-        self.bridge = CvBridge()
-        self.last_inference_time = 0.0
-
-        self.sub_image = self.create_subscription(
-            Image, self.image_topic, self._image_callback, 10
-        )
-        self.pub_detections = self.create_publisher(String, '/detected_objects', 10)
-
-        if self.publish_annotated:
-            self.pub_annotated = self.create_publisher(
-                Image, self.annotated_topic, 10
-            )
-
-        self.get_logger().info(
-            f'DetectorNode ready — model={self.model_name}, '
-            f'conf={self.conf_threshold}, device={self.device}, '
-            f'topic={self.image_topic}'
-        )
-
     # ------------------------------------------------------------------ #
     # Model loading
     # ------------------------------------------------------------------ #
 
-    def _load_model(self):
-        """Load the YOLO model. Logs error but doesn't crash if unavailable."""
+    def _load_model(self) -> bool:
+        """Load the YOLO model. Returns True on success."""
         try:
             from ultralytics import YOLO
             self.model = YOLO(self.model_name)
-            # Warm up with a dummy image
             dummy = np.zeros((640, 640, 3), dtype=np.uint8)
             self.model.predict(dummy, device=self.device, verbose=False)
-            self.get_logger().info(f'YOLO model "{self.model_name}" loaded on device={self.device}')
+            self.get_logger().info(
+                f'YOLO model "{self.model_name}" loaded on device={self.device}'
+            )
+            return True
         except ImportError:
             self.get_logger().error(
                 'ultralytics not installed! Run: pip3 install ultralytics'
             )
         except Exception as e:
             self.get_logger().error(f'Failed to load model: {e}')
+        return False
 
     # ------------------------------------------------------------------ #
     # Image callback
@@ -105,9 +160,11 @@ class DetectorNode(Node):
         if self.model is None:
             return
 
-        # Convert ROS Image → OpenCV
+        # Convert ROS Image -> OpenCV
         try:
-            cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding=self.image_encoding)
+            cv_image = self.bridge.imgmsg_to_cv2(
+                msg, desired_encoding=self.image_encoding
+            )
         except Exception as e:
             self.get_logger().warn(f'cv_bridge error: {e}')
             return
@@ -122,15 +179,18 @@ class DetectorNode(Node):
 
         detections = self._parse_results(results)
 
-        # Publish detections as JSON
-        det_msg = String()
-        det_msg.data = json.dumps(detections)
+        # Publish typed message
+        det_msg = DetectedObjectArray()
+        det_msg.header = Header()
+        det_msg.header.stamp = msg.header.stamp
+        det_msg.header.frame_id = msg.header.frame_id
+        det_msg.objects = detections
         self.pub_detections.publish(det_msg)
 
         # Publish annotated image
-        if self.publish_annotated and results:
+        if self.publish_annotated and self.pub_annotated and results:
             try:
-                annotated = results[0].plot()  # ultralytics built-in visualization
+                annotated = results[0].plot()
                 ann_msg = self.bridge.cv2_to_imgmsg(annotated, encoding='bgr8')
                 ann_msg.header = msg.header
                 self.pub_annotated.publish(ann_msg)
@@ -138,7 +198,7 @@ class DetectorNode(Node):
                 self.get_logger().warn(f'Annotated image error: {e}')
 
         if detections:
-            labels = [d['label'] for d in detections]
+            labels = [d.label for d in detections]
             self.get_logger().debug(f'Detected: {labels}')
 
     # ------------------------------------------------------------------ #
@@ -146,7 +206,7 @@ class DetectorNode(Node):
     # ------------------------------------------------------------------ #
 
     def _parse_results(self, results) -> list:
-        """Convert YOLO results to a list of detection dicts."""
+        """Convert YOLO results to a list of DetectedObject messages."""
         detections = []
         if not results or len(results) == 0:
             return detections
@@ -164,16 +224,14 @@ class DetectorNode(Node):
             label = results[0].names.get(cls_id, f'class_{cls_id}')
             x1, y1, x2, y2 = box.xyxy[0].tolist()
 
-            detections.append({
-                'label': label,
-                'confidence': round(conf, 3),
-                'bbox': {
-                    'x1': round(x1, 1),
-                    'y1': round(y1, 1),
-                    'x2': round(x2, 1),
-                    'y2': round(y2, 1),
-                },
-            })
+            obj = DetectedObject()
+            obj.label = label
+            obj.confidence = round(conf, 3)
+            obj.x1 = round(x1, 1)
+            obj.y1 = round(y1, 1)
+            obj.x2 = round(x2, 1)
+            obj.y2 = round(y2, 1)
+            detections.append(obj)
 
         return detections
 

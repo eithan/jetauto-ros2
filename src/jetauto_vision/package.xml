@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>jetauto_vision</name>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <description>Object detection for JetAuto using YOLOv8</description>
   <maintainer email="eithan@users.noreply.github.com">Eithan</maintainer>
   <license>MIT</license>
@@ -11,6 +11,7 @@
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>cv_bridge</depend>
+  <depend>jetauto_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
