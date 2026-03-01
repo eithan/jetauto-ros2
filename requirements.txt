@@ -4,6 +4,7 @@
 # Vision
 ultralytics>=8.0.0          # YOLOv8 inference
 opencv-python-headless>=4.5 # Image processing (headless for robot)
+numpy<2                     # Must stay on 1.x (cv_bridge/matplotlib compiled against it)
 
 # TTS
 pyttsx3>=2.90               # Offline text-to-speech

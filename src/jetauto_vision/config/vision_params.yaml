@@ -6,7 +6,7 @@ detector_node:
     device: "0"                        # "0" = first GPU, "cpu" = CPU-only
 
     # --- Camera ---
-    image_topic: "/camera/color/image_raw"
+    image_topic: "/depth_cam/rgb/image_raw"
     image_encoding: "bgr8"            # bgr8 or rgb8
 
     # --- Performance ---
