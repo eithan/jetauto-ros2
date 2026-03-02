@@ -43,35 +43,60 @@ def generate_launch_description():
         namespace='',
         output='screen',
         parameters=[{
-            'model_name':           LaunchConfiguration('model_name'),
-            'confidence_threshold': LaunchConfiguration('confidence_threshold'),
-            'device':               LaunchConfiguration('device'),
-            'image_topic':          '/camera/color/image_raw',
-            'publish_annotated_image': False,   # skip annotated for sim
+            'model_name':              LaunchConfiguration('model_name'),
+            'confidence_threshold':    LaunchConfiguration('confidence_threshold'),
+            'device':                  LaunchConfiguration('device'),
+            'image_topic':             '/camera/color/image_raw',
+            'publish_annotated_image': False,
         }],
     )
 
     # ── Lifecycle transitions ─────────────────────────────────────────── #
-    # Wait 3s for node to start, then configure; wait another 4s, then activate.
+    # Use a shell script that polls until the node is actually in the
+    # expected state, so we're not racing against startup time.
     configure_cmd = TimerAction(
-        period=3.0,
+        period=4.0,
         actions=[ExecuteProcess(
-            cmd=['ros2', 'lifecycle', 'set', '/detector_node', 'configure'],
+            cmd=[
+                'bash', '-c',
+                'for i in $(seq 1 10); do '
+                '  STATE=$(ros2 lifecycle get /detector_node 2>/dev/null); '
+                '  echo "[lifecycle] state: $STATE"; '
+                '  if echo "$STATE" | grep -q "unconfigured"; then '
+                '    ros2 lifecycle set /detector_node configure && break; '
+                '  elif echo "$STATE" | grep -q "inactive\\|active"; then '
+                '    echo "[lifecycle] already past unconfigured, skipping configure"; break; '
+                '  fi; '
+                '  sleep 1; '
+                'done'
+            ],
             output='screen',
         )],
     )
 
     activate_cmd = TimerAction(
-        period=7.0,
+        period=15.0,
         actions=[ExecuteProcess(
-            cmd=['ros2', 'lifecycle', 'set', '/detector_node', 'activate'],
+            cmd=[
+                'bash', '-c',
+                'for i in $(seq 1 10); do '
+                '  STATE=$(ros2 lifecycle get /detector_node 2>/dev/null); '
+                '  echo "[lifecycle] state: $STATE"; '
+                '  if echo "$STATE" | grep -q "inactive"; then '
+                '    ros2 lifecycle set /detector_node activate && break; '
+                '  elif echo "$STATE" | grep -q "active"; then '
+                '    echo "[lifecycle] already active"; break; '
+                '  fi; '
+                '  sleep 1; '
+                'done'
+            ],
             output='screen',
         )],
     )
 
-    # ── Sim node — starts after detector is active ────────────────────── #
+    # ── Sim node — starts after detector activation window ────────────── #
     sim = TimerAction(
-        period=10.0,
+        period=28.0,
         actions=[Node(
             package='jetauto_sim',
             executable='sim_node',
