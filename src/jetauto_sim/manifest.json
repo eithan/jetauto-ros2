@@ -1,0 +1,22 @@
+[
+  {"file": "01_man.jpg",         "description": "a man",                            "expected_yolo": ["person"]},
+  {"file": "02_woman.jpg",       "description": "a woman",                          "expected_yolo": ["person"]},
+  {"file": "03_child.jpg",       "description": "a child",                          "expected_yolo": ["person"]},
+  {"file": "04_dog.jpg",         "description": "a dog",                            "expected_yolo": ["dog"]},
+  {"file": "05_cat.jpg",         "description": "a cat",                            "expected_yolo": ["cat"]},
+  {"file": "06_bird.jpg",        "description": "a bird",                           "expected_yolo": ["bird"]},
+  {"file": "07_car.jpg",         "description": "a car",                            "expected_yolo": ["car"]},
+  {"file": "08_table.jpg",       "description": "a table",                          "expected_yolo": ["dining table"]},
+  {"file": "09_chair.jpg",       "description": "a chair",                          "expected_yolo": ["chair"]},
+  {"file": "10_man_woman.jpg",   "description": "a man and a woman",                "expected_yolo": ["person"]},
+  {"file": "11_family.jpg",      "description": "a man, woman, and child",          "expected_yolo": ["person"]},
+  {"file": "12_dog_cat.jpg",     "description": "a dog and a cat",                  "expected_yolo": ["dog", "cat"]},
+  {"file": "13_dog_bird.jpg",    "description": "a dog and a bird",                 "expected_yolo": ["dog", "bird"]},
+  {"file": "14_person_car.jpg",  "description": "a person next to a car",           "expected_yolo": ["person", "car"]},
+  {"file": "15_table_chair.jpg", "description": "a table and chairs",               "expected_yolo": ["dining table", "chair"]},
+  {"file": "16_person_table.jpg","description": "a person sitting at a table",      "expected_yolo": ["person", "dining table"]},
+  {"file": "17_pets.jpg",        "description": "a dog and a cat together",         "expected_yolo": ["dog", "cat"]},
+  {"file": "18_person_dog.jpg",  "description": "a person with a dog",              "expected_yolo": ["person", "dog"]},
+  {"file": "19_street_scene.jpg","description": "people and cars on a street",      "expected_yolo": ["person", "car"]},
+  {"file": "20_complex.jpg",     "description": "a family with a dog and a cat",    "expected_yolo": ["person", "dog"]}
+]
