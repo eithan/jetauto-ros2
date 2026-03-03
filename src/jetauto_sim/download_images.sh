@@ -50,6 +50,25 @@ dl "https://images.pexels.com/photos/1753706/pexels-photo-1753706.jpeg?w=640&h=4
 dl "https://images.pexels.com/photos/1703192/pexels-photo-1703192.jpeg?w=640&h=480&fit=crop"          "19_street_scene.jpg"
 dl "https://images.pexels.com/photos/1683975/pexels-photo-1683975.jpeg?w=640&h=480&fit=crop"          "20_complex.jpg"
 
+# ── Bug-reproduction scenarios ───────────────────────────────────────────── #
+# Multi-person count tests
+dl "https://images.pexels.com/photos/3184398/pexels-photo-3184398.jpeg?w=640&h=480&fit=crop"          "21_two_people.jpg"
+dl "https://images.pexels.com/photos/1755083/pexels-photo-1755083.jpeg?w=640&h=480&fit=crop"          "22_group_people.jpg"
+
+# Person + animal combos
+dl "https://images.pexels.com/photos/1521305/pexels-photo-1521305.jpeg?w=640&h=480&fit=crop"          "23_person_cat2.jpg"
+dl "https://images.pexels.com/photos/1254140/pexels-photo-1254140.jpeg?w=640&h=480&fit=crop"          "24_person_dog_cat.jpg"
+
+# False-positive: objects that look like appliances
+dl "https://images.pexels.com/photos/1427107/pexels-photo-1427107.jpeg?w=640&h=480&fit=crop"          "25_boxes.jpg"
+dl "https://images.pexels.com/photos/4481259/pexels-photo-4481259.jpeg?w=640&h=480&fit=crop"          "26_shelf.jpg"
+dl "https://images.pexels.com/photos/6214476/pexels-photo-6214476.jpeg?w=640&h=480&fit=crop"          "27_lockers.jpg"
+
+# Crowded public space
+dl "https://images.pexels.com/photos/1267277/pexels-photo-1267277.jpeg?w=640&h=480&fit=crop"          "29_crowded.jpg"
+
+# Motion entries reuse 01, 08, 10, 18 — no new downloads needed
+
 echo ""
 echo "Download complete!"
 echo ""
