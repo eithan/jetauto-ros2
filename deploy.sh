@@ -14,9 +14,9 @@
 set -euo pipefail
 
 # -- Configuration --
-ROBOT_USER="${ROBOT_USER:-hiwonder}"
-ROBOT_HOST="${ROBOT_HOST:-192.168.149.1}"
-ROBOT_WS="${ROBOT_WS:-/home/hiwonder/ros2_ws}"
+ROBOT_USER="${ROBOT_USER:-ubuntu}"
+ROBOT_HOST="${ROBOT_HOST:-192.168.1.50}"
+ROBOT_WS="${ROBOT_WS:-/home/ubuntu/ros2_ws}"
 SSH_KEY="${SSH_KEY:-}"  # e.g. ~/.ssh/jetauto_rsa (empty = default key)
 
 # -- Derived --
