@@ -10,7 +10,8 @@ tts_node:
     voice_id: ""                       # empty = system default; set to specific voice ID
 
     # --- Behavior ---
-    cooldown: 5.0                      # seconds between announcements (avoid spam)
+    cooldown: 10.0                     # seconds between announcements (avoid spam)
+    scene_forget_timeout: 30.0        # reset known labels after this many seconds of no detections
     min_confidence: 0.6                # only announce objects above this confidence
     max_objects_per_announcement: 5    # cap objects mentioned in one sentence
     announce_new_only: true            # only speak when new objects appear

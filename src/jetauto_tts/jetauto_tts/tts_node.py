@@ -37,11 +37,13 @@ class TTSNode(LifecycleNode):
         self.declare_parameter('min_confidence', 0.6)
         self.declare_parameter('max_objects_per_announcement', 5)
         self.declare_parameter('announce_new_only', True)
+        self.declare_parameter('scene_forget_timeout', 30.0)  # seconds before resetting known labels
         self.declare_parameter('greeting', 'I can see')
 
         # -- State --
         self.last_announcement_time = 0.0
         self.last_announced_labels = set()
+        self.last_detection_time = 0.0   # tracks when we last saw anything
         self.tts_engine = None
         self._speech_queue = queue.Queue(maxsize=10)
         self._speaker_thread = None
@@ -120,6 +122,7 @@ class TTSNode(LifecycleNode):
         self.min_confidence = self.get_parameter('min_confidence').value
         self.max_objects = self.get_parameter('max_objects_per_announcement').value
         self.announce_new_only = self.get_parameter('announce_new_only').value
+        self.scene_forget_timeout = self.get_parameter('scene_forget_timeout').value
         self.greeting = self.get_parameter('greeting').value
 
     # ------------------------------------------------------------------ #
@@ -212,12 +215,19 @@ class TTSNode(LifecycleNode):
             if len(labels) >= self.max_objects:
                 break
 
-        # Check if anything new
         current_set = set(labels)
-        if self.announce_new_only and current_set == self.last_announced_labels:
+
+        # Forget old labels if nothing was detected for a while (scene change)
+        if now - self.last_detection_time > self.scene_forget_timeout:
+            self.last_announced_labels = set()
+        self.last_detection_time = now
+
+        # Only announce if there are genuinely new labels not seen before
+        new_labels = current_set - self.last_announced_labels
+        if self.announce_new_only and not new_labels:
             return
 
-        self.last_announced_labels = current_set
+        self.last_announced_labels |= current_set
         self.last_announcement_time = now
 
         # Build and enqueue sentence
