@@ -1,7 +1,7 @@
 detector_node:
   ros__parameters:
     # --- Model ---
-    model_name: "yolov8s.pt"          # yolov8n (fast) / yolov8s / yolov8m (accurate)
+    model_name: "/home/ubuntu/models/yolov8s.pt"  # absolute path avoids re-download on each launch
     confidence_threshold: 0.65         # min confidence to publish [0.0-1.0]
     device: "0"                        # "0" = first GPU, "cpu" = CPU-only
 
