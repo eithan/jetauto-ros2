@@ -49,15 +49,12 @@ _SYSTEM_MESSAGES = {
 # phrases here and they'll just work.
 # ---------------------------------------------------------------------------
 COMMAND_MAP: dict[str, str] = {
-    # --- Detection control ---
-    'go forward':   'enable_detection',   # repurposed until custom grammar
-    'go backward':  'disable_detection',  # repurposed until custom grammar
-
-    # Placeholders for when you add these to the iFlytek grammar:
-    # 'start detection':  'enable_detection',
-    # 'stop detection':   'disable_detection',
-    # 'enable vision':    'enable_detection',
-    # 'disable vision':   'disable_detection',
+    # --- Detection control (custom phrases added to call.bnf) ---
+    'start detection':  'enable_detection',
+    'enable vision':    'enable_detection',
+    'stop detection':   'disable_detection',
+    'disable vision':   'disable_detection',
+    'what do you see':  'enable_detection',   # convenience alias
 }
 
 
