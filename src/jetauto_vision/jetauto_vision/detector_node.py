@@ -18,6 +18,7 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Header
 from cv_bridge import CvBridge
 
+from std_msgs.msg import Bool
 from jetauto_msgs.msg import DetectedObject, DetectedObjectArray
 
 
@@ -37,6 +38,7 @@ class DetectorNode(LifecycleNode):
         self.declare_parameter('max_detections', 10)
         self.declare_parameter('publish_annotated_image', True)
         self.declare_parameter('annotated_image_topic', '/detected_objects/image')
+        self.declare_parameter('start_enabled', True)
 
         # -- Internal state --
         self.model = None
@@ -46,7 +48,19 @@ class DetectorNode(LifecycleNode):
         self.pub_detections = None
         self.pub_annotated = None
 
+        # -- Voice control enable/disable --
+        # Subscribes to /jetauto/detection/enable (std_msgs/Bool)
+        # Can be toggled at any time, even before activation.
+        self.enabled = self.get_parameter('start_enabled').value
+        self.create_subscription(Bool, '/jetauto/detection/enable', self._enable_callback, 1)
+
         self.get_logger().info('DetectorNode created (inactive — waiting for configure)')
+
+    def _enable_callback(self, msg: Bool):
+        """Toggle detection on/off via voice or external command."""
+        self.enabled = msg.data
+        state = 'ENABLED' if self.enabled else 'DISABLED'
+        self.get_logger().info(f'Detection {state} via /jetauto/detection/enable')
 
     # ------------------------------------------------------------------ #
     # Lifecycle callbacks
@@ -152,6 +166,9 @@ class DetectorNode(LifecycleNode):
 
     def _image_callback(self, msg: Image):
         """Process incoming camera frames at the configured interval."""
+        if not self.enabled:
+            return
+
         now = time.time()
         if now - self.last_inference_time < self.inference_interval:
             return

@@ -64,7 +64,7 @@ do_build() {
     ssh ${SSH_OPTS} "${SSH_TARGET}" bash -lc "'
         source /opt/ros/humble/setup.bash &&
         cd ${ROBOT_WS} &&
-        colcon build --packages-select jetauto_msgs jetauto_vision jetauto_tts --symlink-install &&
+        colcon build --packages-select jetauto_msgs jetauto_vision jetauto_tts jetauto_voice --symlink-install &&
         echo \"Build complete ✓\"
     '"
 }
