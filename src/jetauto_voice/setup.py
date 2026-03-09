@@ -23,6 +23,7 @@ setup(
     entry_points={
         'console_scripts': [
             'voice_control_node = jetauto_voice.voice_control_node:main',
+            'voice_commander_node = jetauto_voice.voice_commander_node:main',
         ],
     },
 )

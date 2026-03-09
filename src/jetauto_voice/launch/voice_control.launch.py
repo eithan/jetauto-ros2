@@ -1,25 +1,118 @@
 """
 Launch file for JetAuto custom voice control.
 
-Starts ONLY our voice_control_node.
-Hiwonder's asr_node must already be running (it's the hardware ASR bridge).
-Do NOT launch any of Hiwonder's voice_control_*.py nodes — ours replaces them.
+Launches the legacy iFlyTek bridge node (voice_control_node) OR the new
+fully-offline voice commander (voice_commander_node).  By default only the
+offline commander is started.  Set the ``use_iflytek`` launch argument to
+``true`` to start the legacy bridge instead (requires asr_node running).
 
-Usage:
-  ros2 launch jetauto_voice voice_control.launch.py
+Usage::
+
+    # Offline commander (default — no iFlyTek needed):
+    ros2 launch jetauto_voice voice_control.launch.py
+
+    # Legacy iFlyTek bridge:
+    ros2 launch jetauto_voice voice_control.launch.py use_iflytek:=true
+
+    # Offline commander with custom parameters:
+    ros2 launch jetauto_voice voice_control.launch.py \\
+        wake_word_model:=alexa \\
+        wake_word_threshold:=0.4 \\
+        stt_model_size:=small \\
+        stt_device:=cuda
 """
 
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition, UnlessCondition
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    use_iflytek_arg = DeclareLaunchArgument(
+        'use_iflytek',
+        default_value='false',
+        description='If true, launch the legacy iFlyTek ASR bridge instead of the offline commander',
+    )
+
+    # -- Offline voice commander parameters --
+    wake_word_model_arg = DeclareLaunchArgument(
+        'wake_word_model',
+        default_value='hey_jarvis',
+        description='openWakeWord model name (hey_jarvis, alexa, hey_mycroft, ...)',
+    )
+    wake_word_threshold_arg = DeclareLaunchArgument(
+        'wake_word_threshold',
+        default_value='0.5',
+        description='Wake word detection threshold [0.0, 1.0]',
+    )
+    stt_model_size_arg = DeclareLaunchArgument(
+        'stt_model_size',
+        default_value='base',
+        description='faster-whisper model size: tiny, base, small, medium, large-v2',
+    )
+    stt_device_arg = DeclareLaunchArgument(
+        'stt_device',
+        default_value='cuda',
+        description='STT inference device: cuda or cpu',
+    )
+    stt_compute_type_arg = DeclareLaunchArgument(
+        'stt_compute_type',
+        default_value='float16',
+        description='faster-whisper compute type: float16, int8, float32',
+    )
+    mic_device_index_arg = DeclareLaunchArgument(
+        'mic_device_index',
+        default_value='-1',
+        description='ALSA mic device index (-1 = system default)',
+    )
+    capture_duration_arg = DeclareLaunchArgument(
+        'capture_duration_sec',
+        default_value='4.0',
+        description='Seconds to capture after wake word',
+    )
+
+    use_iflytek = LaunchConfiguration('use_iflytek')
+
+    # -- Offline voice commander (default) --
+    voice_commander = Node(
+        package='jetauto_voice',
+        executable='voice_commander_node',
+        name='voice_commander_node',
+        output='screen',
+        emulate_tty=True,
+        condition=UnlessCondition(use_iflytek),
+        parameters=[{
+            'wake_word_model': LaunchConfiguration('wake_word_model'),
+            'wake_word_threshold': LaunchConfiguration('wake_word_threshold'),
+            'stt_model_size': LaunchConfiguration('stt_model_size'),
+            'stt_device': LaunchConfiguration('stt_device'),
+            'stt_compute_type': LaunchConfiguration('stt_compute_type'),
+            'mic_device_index': LaunchConfiguration('mic_device_index'),
+            'capture_duration_sec': LaunchConfiguration('capture_duration_sec'),
+        }],
+    )
+
+    # -- Legacy iFlyTek bridge (opt-in) --
+    voice_control = Node(
+        package='jetauto_voice',
+        executable='voice_control_node',
+        name='voice_control_node',
+        output='screen',
+        emulate_tty=True,
+        condition=IfCondition(use_iflytek),
+    )
+
     return LaunchDescription([
-        Node(
-            package='jetauto_voice',
-            executable='voice_control_node',
-            name='voice_control_node',
-            output='screen',
-            emulate_tty=True,
-        ),
+        use_iflytek_arg,
+        wake_word_model_arg,
+        wake_word_threshold_arg,
+        stt_model_size_arg,
+        stt_device_arg,
+        stt_compute_type_arg,
+        mic_device_index_arg,
+        capture_duration_arg,
+        voice_commander,
+        voice_control,
     ])

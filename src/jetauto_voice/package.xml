@@ -3,7 +3,7 @@
 <package format="3">
   <name>jetauto_voice</name>
   <version>0.1.0</version>
-  <description>Custom voice control for JetAuto — maps ASR phrases to robot actions</description>
+  <description>Custom voice control for JetAuto — iFlyTek bridge node plus fully offline openWakeWord + faster-whisper voice commander</description>
   <maintainer email="eithan@users.noreply.github.com">Eithan</maintainer>
   <license>MIT</license>
 

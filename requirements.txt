@@ -9,6 +9,13 @@ numpy<2                     # Must stay on 1.x (cv_bridge/matplotlib compiled ag
 # TTS
 pyttsx3>=2.90               # Offline text-to-speech
 
+# Voice Commander — offline wake word + STT pipeline (jetauto_voice)
+openwakeword>=0.6.0         # Wake word detection (CPU, always-on)
+faster-whisper>=1.0.0       # Whisper STT — CUDA-accelerated on Orin Nano, falls back to CPU
+sounddevice>=0.4.6          # Cross-platform mic capture via ALSA/PortAudio
+# Note: PortAudio system library also required:
+#   sudo apt-get install libportaudio2 portaudio19-dev
+
 # ROS2 (installed via apt, listed here for reference)
 # rclpy
 # sensor_msgs
