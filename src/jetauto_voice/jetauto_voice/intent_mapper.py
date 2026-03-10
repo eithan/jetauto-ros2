@@ -321,10 +321,12 @@ def is_enable_command(text: str) -> bool:
     return any(
         phrase in t
         for phrase in [
+            "start vision",
             "start detection",
             "enable detection",
             "enable vision",
             "turn on detection",
+            "turn on vision",
             "start looking",
             "start scanning",
             "what do you see",
@@ -345,10 +347,12 @@ def is_disable_command(text: str) -> bool:
     return any(
         phrase in t
         for phrase in [
+            "stop vision",
             "stop detection",
             "disable detection",
             "disable vision",
             "turn off detection",
+            "turn off vision",
             "stop looking",
             "stop scanning",
         ]
