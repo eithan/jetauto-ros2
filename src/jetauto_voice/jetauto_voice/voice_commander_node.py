@@ -123,7 +123,7 @@ class VoiceCommanderNode(Node):
         self.declare_parameter("stt_compute_type", "float16")
         self.declare_parameter("mic_device_index", -1)
         self.declare_parameter("vad_aggressiveness", 3)
-        self.declare_parameter("vad_drain_ms", 400)
+        self.declare_parameter("vad_drain_ms", 600)
         self.declare_parameter("vad_speech_start_frames", 4)
         self.declare_parameter("vad_speech_end_frames", 30)
         self.declare_parameter("vad_min_speech_ms", 400)
@@ -321,6 +321,10 @@ class VoiceCommanderNode(Node):
                 # Skip OWW evaluation during cooldown; still drain the stream
                 if cooldown_remaining > 0:
                     cooldown_remaining -= 1
+                    # Feed chunks to OWW during cooldown to flush stale state
+                    # but don't act on the scores
+                    if self._wake_word_detector is not None:
+                        self._wake_word_detector.predict(audio_flat)
                     continue
 
                 # openWakeWord expects int16 samples
@@ -355,9 +359,12 @@ class VoiceCommanderNode(Node):
         self.get_logger().info("*** SPEAK NOW (greeting) ***")
 
         first_listen = True
+        drain_ms = self._vad_drain_ms + 200  # extra buffer for TTS reverb
 
         while not self._shutdown_event.is_set():
             if not first_listen:
+                # Drain mic to clear TTS echo before beep + VAD
+                self._drain_mic(stream, drain_ms)
                 self._play_beep()
                 self.get_logger().info("*** SPEAK NOW ***")
 
@@ -389,6 +396,22 @@ class VoiceCommanderNode(Node):
 
             # Dispatch intent; block until response TTS finishes, then loop
             self._dispatch_intent(text)
+
+    def _drain_mic(self, stream, ms: int) -> None:
+        """Read and discard audio from the mic stream for the given duration.
+
+        Used to flush TTS echo / wake word tail from the mic buffer before
+        opening VAD, preventing the robot from hearing its own voice.
+
+        Args:
+            stream: Open sounddevice InputStream.
+            ms: Milliseconds of audio to discard.
+        """
+        samples = int(ms * self._sample_rate / 1000)
+        try:
+            stream.read(samples)
+        except Exception:
+            pass
 
     def _capture_vad(self, stream) -> Optional[np.ndarray]:
         """Capture speech using WebRTC VAD with automatic start/end detection.
