@@ -19,7 +19,8 @@ Usage::
         wake_word_model:=alexa \\
         wake_word_threshold:=0.4 \\
         stt_model_size:=small \\
-        stt_device:=cuda
+        vad_energy_threshold:=400 \\
+        vad_silence_ms:=800
 """
 
 from launch import LaunchDescription
@@ -67,10 +68,25 @@ def generate_launch_description():
         default_value='-1',
         description='ALSA mic device index (-1 = system default)',
     )
-    capture_duration_arg = DeclareLaunchArgument(
-        'capture_duration_sec',
-        default_value='4.0',
-        description='Seconds to capture after wake word',
+    vad_energy_threshold_arg = DeclareLaunchArgument(
+        'vad_energy_threshold',
+        default_value='300',
+        description='RMS energy threshold for speech detection (0-32768). Raise in noisy environments.',
+    )
+    vad_silence_ms_arg = DeclareLaunchArgument(
+        'vad_silence_ms',
+        default_value='700',
+        description='Milliseconds of silence that triggers end-of-utterance.',
+    )
+    vad_max_duration_sec_arg = DeclareLaunchArgument(
+        'vad_max_duration_sec',
+        default_value='8.0',
+        description='Maximum seconds to capture before giving up.',
+    )
+    wake_cooldown_sec_arg = DeclareLaunchArgument(
+        'wake_cooldown_sec',
+        default_value='2.0',
+        description='Seconds to suppress wake word re-triggering after a detection.',
     )
 
     use_iflytek = LaunchConfiguration('use_iflytek')
@@ -90,7 +106,10 @@ def generate_launch_description():
             'stt_device': LaunchConfiguration('stt_device'),
             'stt_compute_type': LaunchConfiguration('stt_compute_type'),
             'mic_device_index': LaunchConfiguration('mic_device_index'),
-            'capture_duration_sec': LaunchConfiguration('capture_duration_sec'),
+            'vad_energy_threshold': LaunchConfiguration('vad_energy_threshold'),
+            'vad_silence_ms': LaunchConfiguration('vad_silence_ms'),
+            'vad_max_duration_sec': LaunchConfiguration('vad_max_duration_sec'),
+            'wake_cooldown_sec': LaunchConfiguration('wake_cooldown_sec'),
         }],
     )
 
@@ -112,7 +131,10 @@ def generate_launch_description():
         stt_device_arg,
         stt_compute_type_arg,
         mic_device_index_arg,
-        capture_duration_arg,
+        vad_energy_threshold_arg,
+        vad_silence_ms_arg,
+        vad_max_duration_sec_arg,
+        wake_cooldown_sec_arg,
         voice_commander,
         voice_control,
     ])

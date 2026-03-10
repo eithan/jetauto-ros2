@@ -12,7 +12,8 @@ Flow::
     mic audio  →  openWakeWord (continuous, 80ms chunks)
                       │ wake word detected
                       ▼
-               capture N seconds of audio
+               VAD endpoint detection
+               (capture until silence)
                       │
                       ▼
                faster-whisper → transcript text
@@ -49,8 +50,19 @@ stt_compute_type : str
 mic_device_index : int
     ALSA device index for sounddevice. ``-1`` uses the system default.
     Default: ``-1``.
-capture_duration_sec : float
-    Seconds of audio to capture after wake word detection. Default: ``4.0``.
+vad_energy_threshold : int
+    RMS energy level (0–32768) above which a chunk is considered speech.
+    Tune up if noisy environment causes false triggers; tune down if mic
+    is very quiet. Default: ``300``.
+vad_silence_ms : int
+    Milliseconds of silence after speech that triggers end-of-utterance.
+    Default: ``700`` (700ms).
+vad_max_duration_sec : float
+    Maximum seconds to wait for an utterance before giving up.
+    Default: ``8.0``.
+wake_cooldown_sec : float
+    Seconds to ignore wake word detections after handling one, preventing
+    immediate re-triggering on residual OWW scores. Default: ``2.0``.
 sample_rate : int
     Microphone sample rate in Hz. Must match openWakeWord's expected rate
     of 16000 Hz. Default: ``16000``.
@@ -104,7 +116,10 @@ class VoiceCommanderNode(Node):
         self.declare_parameter("stt_device", "cuda")
         self.declare_parameter("stt_compute_type", "float16")
         self.declare_parameter("mic_device_index", -1)
-        self.declare_parameter("capture_duration_sec", 4.0)
+        self.declare_parameter("vad_energy_threshold", 300)
+        self.declare_parameter("vad_silence_ms", 700)
+        self.declare_parameter("vad_max_duration_sec", 8.0)
+        self.declare_parameter("wake_cooldown_sec", 2.0)
         self.declare_parameter("sample_rate", 16000)
 
         # -- Read parameters --
@@ -114,7 +129,10 @@ class VoiceCommanderNode(Node):
         self._stt_device: str = self.get_parameter("stt_device").value
         self._stt_compute_type: str = self.get_parameter("stt_compute_type").value
         self._mic_device_index: int = self.get_parameter("mic_device_index").value
-        self._capture_duration: float = self.get_parameter("capture_duration_sec").value
+        self._vad_energy_threshold: int = self.get_parameter("vad_energy_threshold").value
+        self._vad_silence_ms: int = self.get_parameter("vad_silence_ms").value
+        self._vad_max_duration_sec: float = self.get_parameter("vad_max_duration_sec").value
+        self._wake_cooldown_sec: float = self.get_parameter("wake_cooldown_sec").value
         self._sample_rate: int = self.get_parameter("sample_rate").value
 
         # -- Publishers --
@@ -241,6 +259,9 @@ class VoiceCommanderNode(Node):
         wake word above the configured threshold, calls ``_handle_wake_word``
         to capture and transcribe a full utterance.
 
+        A cooldown period after each detection prevents OWW's residual
+        buffered scores from immediately re-triggering.
+
         Exits cleanly when ``_shutdown_event`` is set.
         """
         try:
@@ -261,6 +282,11 @@ class VoiceCommanderNode(Node):
             self._mic_device_index if self._mic_device_index >= 0 else None
         )
 
+        # How many OWW chunks to skip after a detection (prevents re-triggering)
+        cooldown_total = int(
+            self._wake_cooldown_sec * self._sample_rate / _OWW_CHUNK_SAMPLES
+        )
+
         self.get_logger().info(
             f"Audio loop started — rate={self._sample_rate}Hz, "
             f"chunk={_OWW_CHUNK_SAMPLES} samples, device={device}"
@@ -273,9 +299,15 @@ class VoiceCommanderNode(Node):
             blocksize=_OWW_CHUNK_SAMPLES,
             device=device,
         ) as stream:
+            cooldown_remaining = 0
             while not self._shutdown_event.is_set():
                 audio_chunk, _ = stream.read(_OWW_CHUNK_SAMPLES)
                 audio_flat = audio_chunk.flatten()
+
+                # Skip OWW evaluation during cooldown; still drain the stream
+                if cooldown_remaining > 0:
+                    cooldown_remaining -= 1
+                    continue
 
                 # openWakeWord expects int16 samples
                 prediction: dict = self._wake_word_detector.predict(audio_flat)
@@ -288,26 +320,70 @@ class VoiceCommanderNode(Node):
                         f"Wake word detected (score={score:.3f})"
                     )
                     self._handle_wake_word(stream)
+                    # Apply cooldown after returning from capture to suppress
+                    # any residual high scores still in OWW's sliding window
+                    cooldown_remaining = cooldown_total
 
     def _handle_wake_word(self, stream) -> None:
-        """Capture an utterance after wake word and dispatch intent.
+        """Capture an utterance after wake word using VAD endpoint detection.
+
+        Captures audio chunks until either:
+        - A sustained silence after speech is detected (normal end-of-utterance)
+        - The maximum duration is reached
+
+        This replaces the fixed-duration capture, giving natural sentence
+        boundaries regardless of how long the command takes to say.
 
         Args:
             stream: Open sounddevice InputStream to read from.
         """
-        capture_samples = int(self._sample_rate * self._capture_duration)
-
         # Brief acknowledgment so the user knows we're listening
         self._publish_tts("Yes?")
+        self.get_logger().info("Listening for command (VAD endpoint)...")
 
-        self.get_logger().info(
-            f"Capturing {self._capture_duration}s of audio..."
+        # VAD settings derived from parameters
+        silence_frames_needed = max(
+            1, int(self._vad_silence_ms / (1000 * _OWW_CHUNK_SAMPLES / self._sample_rate))
         )
-        audio_data, _ = stream.read(capture_samples)
+        max_frames = int(
+            self._vad_max_duration_sec * self._sample_rate / _OWW_CHUNK_SAMPLES
+        )
+
+        audio_frames = []
+        silence_count = 0
+        speech_started = False
+
+        for _ in range(max_frames):
+            if self._shutdown_event.is_set():
+                break
+
+            chunk, _ = stream.read(_OWW_CHUNK_SAMPLES)
+            chunk_flat = chunk.flatten()
+            audio_frames.append(chunk_flat)
+
+            # Energy-based speech detection (RMS of int16 samples)
+            rms = float(np.sqrt(np.mean(chunk_flat.astype(np.float32) ** 2)))
+            is_speech = rms > self._vad_energy_threshold
+
+            if is_speech:
+                speech_started = True
+                silence_count = 0
+            else:
+                if speech_started:
+                    silence_count += 1
+                    if silence_count >= silence_frames_needed:
+                        elapsed_ms = len(audio_frames) * _OWW_CHUNK_SAMPLES * 1000 // self._sample_rate
+                        self.get_logger().info(
+                            f"Speech ended — captured {elapsed_ms}ms of audio"
+                        )
+                        break
+
+        if not audio_frames:
+            return
 
         # Normalize int16 → float32 in [-1.0, 1.0] for faster-whisper
         audio_float: np.ndarray = (
-            audio_data.flatten().astype(np.float32) / 32768.0
+            np.concatenate(audio_frames).astype(np.float32) / 32768.0
         )
 
         text = self._transcribe(audio_float)
