@@ -79,6 +79,7 @@ Topics Published
 
 import os
 import queue
+import time
 import threading
 from typing import Optional
 
@@ -121,7 +122,7 @@ class VoiceCommanderNode(Node):
         self.declare_parameter("stt_device", "cuda")
         self.declare_parameter("stt_compute_type", "float16")
         self.declare_parameter("mic_device_index", -1)
-        self.declare_parameter("vad_aggressiveness", 2)
+        self.declare_parameter("vad_aggressiveness", 3)
         self.declare_parameter("vad_drain_ms", 350)
         self.declare_parameter("vad_speech_start_frames", 6)
         self.declare_parameter("vad_speech_end_frames", 20)
@@ -349,8 +350,8 @@ class VoiceCommanderNode(Node):
         """
         from jetauto_voice.intent_mapper import _HALLUCINATIONS
 
-        # Greeting on first activation
-        self._publish_tts("Yes, how may I help you?")
+        # Greeting on first activation — block until TTS finishes
+        self._speak_blocking("Yes, how may I help you?")
         self.get_logger().info("*** SPEAK NOW (greeting) ***")
 
         first_listen = True
@@ -383,10 +384,10 @@ class VoiceCommanderNode(Node):
             # Stop command exits the loop
             if self._is_stop_command(text):
                 self.get_logger().info("Stop command — returning to wake word")
-                self._publish_tts("Okay.")
+                self._speak_blocking("Okay.")
                 break
 
-            # Dispatch intent; loop continues regardless of match result
+            # Dispatch intent; block until response TTS finishes, then loop
             self._dispatch_intent(text)
 
     def _play_beep(self, freq: float = 880.0, duration: float = 0.15, volume: float = 0.4) -> None:
@@ -555,30 +556,44 @@ class VoiceCommanderNode(Node):
             )
             self._publish_detection_enable(True)
             self._publish_target(yolo_label)
-            self._publish_tts(f"Looking for {raw_object}.")
+            self._speak_blocking(f"Looking for {raw_object}.")
             return
 
         # 2. Enable detection
         if is_enable_command(text):
             self.get_logger().info("Intent: enable detection")
             self._publish_detection_enable(True)
-            self._publish_tts("Detection enabled.")
+            self._speak_blocking("Detection enabled.")
             return
 
         # 3. Disable detection
         if is_disable_command(text):
             self.get_logger().info("Intent: disable detection")
             self._publish_detection_enable(False)
-            self._publish_tts("Detection disabled.")
+            self._speak_blocking("Detection disabled.")
             return
 
         # 4. Unknown
         self.get_logger().info(f'No intent matched for: "{text}"')
-        self._publish_tts("Sorry, I didn't understand that.")
+        self._speak_blocking("Sorry, I didn't understand that.")
 
     # ------------------------------------------------------------------ #
     # Publishers
     # ------------------------------------------------------------------ #
+
+    def _speak_blocking(self, text: str) -> None:
+        """Publish TTS and block until estimated speech duration has elapsed.
+
+        Prevents VAD from opening the mic while the robot is still talking.
+        Estimate: ~2.5 words/sec + 0.4s buffer.
+
+        Args:
+            text: Text to speak.
+        """
+        self._publish_tts(text)
+        words = len(text.split())
+        estimated_sec = max(0.8, words / 2.5 + 0.4)
+        time.sleep(estimated_sec)
 
     def _publish_detection_enable(self, enabled: bool) -> None:
         """Publish to /jetauto/detection/enable."""

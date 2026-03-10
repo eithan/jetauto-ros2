@@ -77,7 +77,7 @@ def generate_launch_description():
     )
     vad_aggressiveness_arg = DeclareLaunchArgument(
         'vad_aggressiveness',
-        default_value='2',
+        default_value='3',
         description='WebRTC VAD aggressiveness 0-3 (0=permissive, 3=aggressive). Higher filters more non-speech.',
     )
     vad_speech_end_frames_arg = DeclareLaunchArgument(
