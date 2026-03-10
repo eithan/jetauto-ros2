@@ -77,9 +77,14 @@ Topics Published
     Human-readable TTS response text.
 """
 
+import os
 import queue
 import threading
 from typing import Optional
+
+# Suppress HuggingFace Hub unauthenticated request warnings
+os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 
 import numpy as np
 import rclpy
@@ -117,8 +122,10 @@ class VoiceCommanderNode(Node):
         self.declare_parameter("stt_compute_type", "float16")
         self.declare_parameter("mic_device_index", -1)
         self.declare_parameter("vad_aggressiveness", 2)
-        self.declare_parameter("vad_speech_start_frames", 3)
-        self.declare_parameter("vad_speech_end_frames", 25)
+        self.declare_parameter("vad_drain_ms", 350)
+        self.declare_parameter("vad_speech_start_frames", 6)
+        self.declare_parameter("vad_speech_end_frames", 20)
+        self.declare_parameter("vad_min_speech_ms", 300)
         self.declare_parameter("vad_listen_timeout_sec", 4.0)
         self.declare_parameter("vad_max_duration_sec", 8.0)
         self.declare_parameter("wake_cooldown_sec", 3.0)
@@ -132,8 +139,10 @@ class VoiceCommanderNode(Node):
         self._stt_compute_type: str = self.get_parameter("stt_compute_type").value
         self._mic_device_index: int = self.get_parameter("mic_device_index").value
         self._vad_aggressiveness: int = self.get_parameter("vad_aggressiveness").value
+        self._vad_drain_ms: int = self.get_parameter("vad_drain_ms").value
         self._vad_speech_start_frames: int = self.get_parameter("vad_speech_start_frames").value
         self._vad_speech_end_frames: int = self.get_parameter("vad_speech_end_frames").value
+        self._vad_min_speech_ms: int = self.get_parameter("vad_min_speech_ms").value
         self._vad_listen_timeout_sec: float = self.get_parameter("vad_listen_timeout_sec").value
         self._vad_max_duration_sec: float = self.get_parameter("vad_max_duration_sec").value
         self._wake_cooldown_sec: float = self.get_parameter("wake_cooldown_sec").value
@@ -338,8 +347,9 @@ class VoiceCommanderNode(Node):
         Args:
             stream: Open sounddevice InputStream to read from.
         """
-        # Brief acknowledgment
+        # Acknowledge and signal the user to speak
         self._publish_tts("Yes?")
+        self.get_logger().info("*** SPEAK NOW ***")
 
         audio_float = self._capture_with_vad(stream)
 
@@ -385,15 +395,19 @@ class VoiceCommanderNode(Node):
             audio_data, _ = stream.read(int(self._sample_rate * 5.0))
             return audio_data.flatten().astype(np.float32) / 32768.0
 
+        # Drain audio buffer to clear the tail of the wake word before VAD starts
+        drain_samples = int(self._vad_drain_ms * self._sample_rate / 1000)
+        stream.read(drain_samples)
+
         timeout_frames = int(self._vad_listen_timeout_sec * self._sample_rate / VAD_FRAME_SAMPLES)
         max_frames = int(self._vad_max_duration_sec * self._sample_rate / VAD_FRAME_SAMPLES)
+        min_speech_frames = max(1, self._vad_min_speech_ms // 20)  # 20ms per frame
 
         audio_frames = []
+        speech_frames_total = 0
         speech_run = 0    # consecutive speech frames
         silence_run = 0   # consecutive silence frames after speech
         speech_started = False
-
-        self.get_logger().info("Listening for speech (VAD)...")
 
         for i in range(max_frames):
             if self._shutdown_event.is_set():
@@ -410,24 +424,32 @@ class VoiceCommanderNode(Node):
 
             if is_speech:
                 speech_run += 1
+                speech_frames_total += 1
                 silence_run = 0
-                if speech_run >= self._vad_speech_start_frames:
+                if speech_run >= self._vad_speech_start_frames and not speech_started:
                     speech_started = True
+                    self.get_logger().info("Speech detected — listening...")
             else:
                 speech_run = 0
                 if speech_started:
                     silence_run += 1
                     if silence_run >= self._vad_speech_end_frames:
                         elapsed_ms = len(audio_frames) * VAD_FRAME_SAMPLES * 1000 // self._sample_rate
-                        self.get_logger().info(f"Speech ended — captured {elapsed_ms}ms")
+                        self.get_logger().info(f"*** DONE LISTENING — captured {elapsed_ms}ms, transcribing...")
                         break
                 else:
-                    # Still waiting for speech to start
                     if i >= timeout_frames:
-                        self.get_logger().info("Listen timeout — no speech detected")
+                        self.get_logger().info("Listen timeout — no speech detected, returning to wake word")
                         return None
 
         if not audio_frames or not speech_started:
+            return None
+
+        # Require a minimum amount of actual speech to avoid transcribing noise
+        if speech_frames_total < min_speech_frames:
+            self.get_logger().info(
+                f"Too little speech ({speech_frames_total * 20}ms) — ignoring"
+            )
             return None
 
         audio = np.concatenate(audio_frames).astype(np.float32) / 32768.0
