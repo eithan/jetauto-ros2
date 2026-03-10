@@ -83,7 +83,9 @@ import time
 import threading
 from typing import Optional
 
-# Suppress HuggingFace Hub unauthenticated request warnings
+# Force HuggingFace to use local cache only — no network calls after first download
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 
@@ -187,31 +189,48 @@ class VoiceCommanderNode(Node):
     # ------------------------------------------------------------------ #
 
     def _init_wakeword(self) -> None:
-        """Load the openWakeWord model, downloading it first if needed."""
+        """Load the openWakeWord model from local cache, downloading only if absent."""
         try:
+            import openwakeword  # type: ignore[import]
             from openwakeword.model import Model  # type: ignore[import]
-            from openwakeword.utils import download_models  # type: ignore[import]
         except ImportError:
             self.get_logger().error(
                 "openwakeword not installed! Run: pip3 install openwakeword"
             )
             return
 
-        # Models are NOT bundled with the pip package — download on first run.
-        self.get_logger().info(
-            f"Downloading openWakeWord model '{self._wake_word_model}' if needed..."
+        # Resolve local model path — avoids any network call when model is cached
+        oww_model_dir = os.path.join(
+            os.path.dirname(openwakeword.__file__), "resources", "models"
         )
-        try:
-            download_models([self._wake_word_model])
-        except Exception as exc:
-            self.get_logger().warn(
-                f"Model download for '{self._wake_word_model}' failed ({exc}). "
-                "Will attempt to load from cache anyway."
+        # openWakeWord stores models as <name>_v0.1.onnx
+        local_path = os.path.join(oww_model_dir, f"{self._wake_word_model}_v0.1.onnx")
+
+        if os.path.exists(local_path):
+            model_source = local_path
+            self.get_logger().info(
+                f"Loading openWakeWord model from local cache: {local_path}"
             )
+        else:
+            # First run only — download from HuggingFace then load by name
+            self.get_logger().info(
+                f"openWakeWord model not found locally — downloading '{self._wake_word_model}'..."
+            )
+            try:
+                # Temporarily unset offline mode for download
+                os.environ.pop("HF_HUB_OFFLINE", None)
+                os.environ.pop("TRANSFORMERS_OFFLINE", None)
+                from openwakeword.utils import download_models  # type: ignore[import]
+                download_models([self._wake_word_model])
+                os.environ["HF_HUB_OFFLINE"] = "1"
+                os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            except Exception as exc:
+                self.get_logger().warn(f"Model download failed: {exc}")
+            model_source = self._wake_word_model
 
         try:
             self._wake_word_detector = Model(
-                wakeword_models=[self._wake_word_model],
+                wakeword_models=[model_source],
                 inference_framework="onnx",
             )
             self.get_logger().info(
