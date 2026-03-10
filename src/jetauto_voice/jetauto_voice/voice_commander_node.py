@@ -338,38 +338,56 @@ class VoiceCommanderNode(Node):
                     cooldown_remaining = cooldown_total
 
     def _handle_wake_word(self, stream) -> None:
-        """Capture an utterance using WebRTC VAD for precise endpoint detection.
+        """Greeting + conversation loop activated by wake word.
 
-        Uses webrtcvad (Google's WebRTC voice activity detector) to detect
-        when speech starts and ends, then immediately transcribes. Falls back
-        to a 5-second fixed capture if webrtcvad is not installed.
-
-        Args:
-            stream: Open sounddevice InputStream to read from.
+        First activation says "Yes, how may I help you?" then enters a listen
+        loop. Each subsequent listen within the same session uses a beep.
+        The loop exits (returning to wake word listening) when:
+        - No speech is detected (timeout)
+        - STT produces an empty or hallucinated transcript
+        - The user says "stop" / "cancel" / "never mind"
         """
-        # Play a beep directly so the user hears an immediate "speak now" signal
-        self._play_beep()
-        self.get_logger().info("*** SPEAK NOW ***")
-
-        audio_float = self._capture_with_vad(stream)
-
-        if audio_float is None or len(audio_float) == 0:
-            self.get_logger().info("No speech detected — returning to wake word listen")
-            return
-
-        text = self._transcribe(audio_float)
-        if not text:
-            self.get_logger().info("STT produced empty transcript — ignoring")
-            return
-
-        # Filter known Whisper hallucinations on near-silent audio
         from jetauto_voice.intent_mapper import _HALLUCINATIONS
-        if text.lower().rstrip("?.!,") in _HALLUCINATIONS:
-            self.get_logger().info(f'Whisper hallucination filtered: "{text}"')
-            return
 
-        self.get_logger().info(f'Transcribed: "{text}"')
-        self._dispatch_intent(text)
+        # Greeting on first activation
+        self._publish_tts("Yes, how may I help you?")
+        self.get_logger().info("*** SPEAK NOW (greeting) ***")
+
+        first_listen = True
+
+        while not self._shutdown_event.is_set():
+            if not first_listen:
+                self._play_beep()
+                self.get_logger().info("*** SPEAK NOW ***")
+
+            first_listen = False
+
+            audio_float = self._capture_with_vad(stream)
+
+            if audio_float is None or len(audio_float) == 0:
+                self.get_logger().info("No speech — returning to wake word")
+                break
+
+            text = self._transcribe(audio_float)
+            if not text:
+                self.get_logger().info("Empty transcript — returning to wake word")
+                break
+
+            # Filter Whisper hallucinations
+            if text.lower().rstrip("?.!,") in _HALLUCINATIONS:
+                self.get_logger().info(f'Hallucination filtered: "{text}" — returning to wake word')
+                break
+
+            self.get_logger().info(f'Transcribed: "{text}"')
+
+            # Stop command exits the loop
+            if self._is_stop_command(text):
+                self.get_logger().info("Stop command — returning to wake word")
+                self._publish_tts("Okay.")
+                break
+
+            # Dispatch intent; loop continues regardless of match result
+            self._dispatch_intent(text)
 
     def _play_beep(self, freq: float = 880.0, duration: float = 0.15, volume: float = 0.4) -> None:
         """Play a short sine-wave beep directly via sounddevice.
@@ -507,6 +525,14 @@ class VoiceCommanderNode(Node):
     # ------------------------------------------------------------------ #
     # Intent dispatch
     # ------------------------------------------------------------------ #
+
+    def _is_stop_command(self, text: str) -> bool:
+        """Return True if the user wants to stop the listening session."""
+        t = text.lower().rstrip("?.!,")
+        return any(phrase in t for phrase in [
+            "stop", "cancel", "never mind", "nevermind", "quit", "exit",
+            "that's all", "thats all", "goodbye", "bye", "done",
+        ])
 
     def _dispatch_intent(self, text: str) -> None:
         """Route a transcript to the appropriate action.
