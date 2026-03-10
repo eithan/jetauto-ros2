@@ -347,8 +347,8 @@ class VoiceCommanderNode(Node):
         Args:
             stream: Open sounddevice InputStream to read from.
         """
-        # Acknowledge and signal the user to speak
-        self._publish_tts("Yes?")
+        # Play a beep directly so the user hears an immediate "speak now" signal
+        self._play_beep()
         self.get_logger().info("*** SPEAK NOW ***")
 
         audio_float = self._capture_with_vad(stream)
@@ -370,6 +370,26 @@ class VoiceCommanderNode(Node):
 
         self.get_logger().info(f'Transcribed: "{text}"')
         self._dispatch_intent(text)
+
+    def _play_beep(self, freq: float = 880.0, duration: float = 0.15, volume: float = 0.4) -> None:
+        """Play a short sine-wave beep directly via sounddevice.
+
+        Gives the user an immediate audible 'speak now' cue without
+        depending on the TTS node being running.
+
+        Args:
+            freq: Frequency in Hz. Default 880 Hz (A5).
+            duration: Duration in seconds. Default 0.15s.
+            volume: Amplitude in [0.0, 1.0]. Default 0.4.
+        """
+        try:
+            import sounddevice as sd  # type: ignore[import]
+            t = np.linspace(0, duration, int(self._sample_rate * duration), endpoint=False)
+            tone = (np.sin(2 * np.pi * freq * t) * volume).astype(np.float32)
+            sd.play(tone, samplerate=self._sample_rate)
+            sd.wait()
+        except Exception as exc:
+            self.get_logger().debug(f"Beep playback failed: {exc}")
 
     def _capture_with_vad(self, stream) -> Optional[np.ndarray]:
         """Capture speech using WebRTC VAD endpoint detection.

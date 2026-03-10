@@ -23,11 +23,16 @@ Usage::
         vad_silence_ms:=800
 """
 
+import launch
+import lifecycle_msgs.msg
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import LifecycleNode, Node
+from launch_ros.event_handlers import OnStateTransition
+from launch_ros.events.lifecycle import ChangeState
 
 
 def generate_launch_description():
@@ -123,6 +128,42 @@ def generate_launch_description():
         condition=IfCondition(use_iflytek),
     )
 
+    # -- TTS node (lifecycle) — speaks responses aloud --
+    tts_config = os.path.join(
+        get_package_share_directory('jetauto_tts'),
+        'config',
+        'tts_params.yaml',
+    )
+    tts = LifecycleNode(
+        package='jetauto_tts',
+        executable='tts_node',
+        name='tts_node',
+        namespace='',
+        parameters=[tts_config],
+        output='screen',
+        emulate_tty=True,
+    )
+    tts_configure = launch.actions.EmitEvent(
+        event=ChangeState(
+            lifecycle_node_matcher=launch.events.matches_action(tts),
+            transition_id=lifecycle_msgs.msg.Transition.TRANSITION_CONFIGURE,
+        )
+    )
+    tts_activate = launch.actions.RegisterEventHandler(
+        OnStateTransition(
+            target_lifecycle_node=tts,
+            goal_state='inactive',
+            entities=[
+                launch.actions.EmitEvent(
+                    event=ChangeState(
+                        lifecycle_node_matcher=launch.events.matches_action(tts),
+                        transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
+                    )
+                ),
+            ],
+        )
+    )
+
     return LaunchDescription([
         use_iflytek_arg,
         wake_word_model_arg,
@@ -137,4 +178,7 @@ def generate_launch_description():
         wake_cooldown_sec_arg,
         voice_commander,
         voice_control,
+        tts,
+        tts_configure,
+        tts_activate,
     ])
