@@ -75,10 +75,20 @@ def generate_launch_description():
         default_value='-1',
         description='ALSA mic device index (-1 = system default)',
     )
-    capture_duration_arg = DeclareLaunchArgument(
-        'capture_duration_sec',
-        default_value='5.0',
-        description='Seconds of audio to capture after wake word / beep.',
+    vad_aggressiveness_arg = DeclareLaunchArgument(
+        'vad_aggressiveness',
+        default_value='3',
+        description='WebRTC VAD aggressiveness 0-3. 3=most aggressive noise filtering.',
+    )
+    vad_listen_timeout_sec_arg = DeclareLaunchArgument(
+        'vad_listen_timeout_sec',
+        default_value='10.0',
+        description='Seconds to wait for speech to start before giving up.',
+    )
+    vad_speech_end_frames_arg = DeclareLaunchArgument(
+        'vad_speech_end_frames',
+        default_value='30',
+        description='Consecutive 20ms silence frames to trigger end-of-speech (30=600ms).',
     )
     wake_cooldown_sec_arg = DeclareLaunchArgument(
         'wake_cooldown_sec',
@@ -103,7 +113,9 @@ def generate_launch_description():
             'stt_device': LaunchConfiguration('stt_device'),
             'stt_compute_type': LaunchConfiguration('stt_compute_type'),
             'mic_device_index': LaunchConfiguration('mic_device_index'),
-            'capture_duration_sec': LaunchConfiguration('capture_duration_sec'),
+            'vad_aggressiveness': LaunchConfiguration('vad_aggressiveness'),
+            'vad_listen_timeout_sec': LaunchConfiguration('vad_listen_timeout_sec'),
+            'vad_speech_end_frames': LaunchConfiguration('vad_speech_end_frames'),
             'wake_cooldown_sec': LaunchConfiguration('wake_cooldown_sec'),
         }],
     )
@@ -162,7 +174,9 @@ def generate_launch_description():
         stt_device_arg,
         stt_compute_type_arg,
         mic_device_index_arg,
-        capture_duration_arg,
+        vad_aggressiveness_arg,
+        vad_listen_timeout_sec_arg,
+        vad_speech_end_frames_arg,
         wake_cooldown_sec_arg,
         voice_commander,
         voice_control,
