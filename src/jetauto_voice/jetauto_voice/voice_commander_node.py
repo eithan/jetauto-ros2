@@ -116,10 +116,12 @@ class VoiceCommanderNode(Node):
         self.declare_parameter("stt_device", "cuda")
         self.declare_parameter("stt_compute_type", "float16")
         self.declare_parameter("mic_device_index", -1)
-        self.declare_parameter("vad_energy_threshold", 300)
-        self.declare_parameter("vad_silence_ms", 700)
+        self.declare_parameter("vad_energy_threshold", 200)
+        self.declare_parameter("vad_silence_ms", 1200)
+        self.declare_parameter("vad_min_capture_ms", 2000)
         self.declare_parameter("vad_max_duration_sec", 8.0)
-        self.declare_parameter("wake_cooldown_sec", 2.0)
+        self.declare_parameter("vad_debug", False)
+        self.declare_parameter("wake_cooldown_sec", 3.0)
         self.declare_parameter("sample_rate", 16000)
 
         # -- Read parameters --
@@ -131,7 +133,9 @@ class VoiceCommanderNode(Node):
         self._mic_device_index: int = self.get_parameter("mic_device_index").value
         self._vad_energy_threshold: int = self.get_parameter("vad_energy_threshold").value
         self._vad_silence_ms: int = self.get_parameter("vad_silence_ms").value
+        self._vad_min_capture_ms: int = self.get_parameter("vad_min_capture_ms").value
         self._vad_max_duration_sec: float = self.get_parameter("vad_max_duration_sec").value
+        self._vad_debug: bool = self.get_parameter("vad_debug").value
         self._wake_cooldown_sec: float = self.get_parameter("wake_cooldown_sec").value
         self._sample_rate: int = self.get_parameter("sample_rate").value
 
@@ -342,12 +346,10 @@ class VoiceCommanderNode(Node):
         self.get_logger().info("Listening for command (VAD endpoint)...")
 
         # VAD settings derived from parameters
-        silence_frames_needed = max(
-            1, int(self._vad_silence_ms / (1000 * _OWW_CHUNK_SAMPLES / self._sample_rate))
-        )
-        max_frames = int(
-            self._vad_max_duration_sec * self._sample_rate / _OWW_CHUNK_SAMPLES
-        )
+        chunk_ms = _OWW_CHUNK_SAMPLES * 1000 // self._sample_rate  # ms per chunk (80ms)
+        silence_frames_needed = max(1, self._vad_silence_ms // chunk_ms)
+        min_frames_before_cutoff = max(1, self._vad_min_capture_ms // chunk_ms)
+        max_frames = int(self._vad_max_duration_sec * self._sample_rate / _OWW_CHUNK_SAMPLES)
 
         audio_frames = []
         silence_count = 0
@@ -365,14 +367,19 @@ class VoiceCommanderNode(Node):
             rms = float(np.sqrt(np.mean(chunk_flat.astype(np.float32) ** 2)))
             is_speech = rms > self._vad_energy_threshold
 
+            if self._vad_debug:
+                self.get_logger().info(f"VAD rms={rms:.0f} speech={is_speech}")
+
             if is_speech:
                 speech_started = True
                 silence_count = 0
             else:
                 if speech_started:
                     silence_count += 1
-                    if silence_count >= silence_frames_needed:
-                        elapsed_ms = len(audio_frames) * _OWW_CHUNK_SAMPLES * 1000 // self._sample_rate
+                    # Only allow early cutoff after minimum capture duration
+                    past_minimum = len(audio_frames) >= min_frames_before_cutoff
+                    if silence_count >= silence_frames_needed and past_minimum:
+                        elapsed_ms = len(audio_frames) * chunk_ms
                         self.get_logger().info(
                             f"Speech ended — captured {elapsed_ms}ms of audio"
                         )

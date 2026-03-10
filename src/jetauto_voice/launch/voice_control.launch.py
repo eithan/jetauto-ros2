@@ -70,22 +70,32 @@ def generate_launch_description():
     )
     vad_energy_threshold_arg = DeclareLaunchArgument(
         'vad_energy_threshold',
-        default_value='300',
+        default_value='200',
         description='RMS energy threshold for speech detection (0-32768). Raise in noisy environments.',
     )
     vad_silence_ms_arg = DeclareLaunchArgument(
         'vad_silence_ms',
-        default_value='700',
+        default_value='1200',
         description='Milliseconds of silence that triggers end-of-utterance.',
+    )
+    vad_min_capture_ms_arg = DeclareLaunchArgument(
+        'vad_min_capture_ms',
+        default_value='2000',
+        description='Minimum ms to capture before silence cutoff is allowed.',
     )
     vad_max_duration_sec_arg = DeclareLaunchArgument(
         'vad_max_duration_sec',
         default_value='8.0',
         description='Maximum seconds to capture before giving up.',
     )
+    vad_debug_arg = DeclareLaunchArgument(
+        'vad_debug',
+        default_value='false',
+        description='Log RMS values every chunk for energy threshold calibration.',
+    )
     wake_cooldown_sec_arg = DeclareLaunchArgument(
         'wake_cooldown_sec',
-        default_value='2.0',
+        default_value='3.0',
         description='Seconds to suppress wake word re-triggering after a detection.',
     )
 
@@ -108,7 +118,9 @@ def generate_launch_description():
             'mic_device_index': LaunchConfiguration('mic_device_index'),
             'vad_energy_threshold': LaunchConfiguration('vad_energy_threshold'),
             'vad_silence_ms': LaunchConfiguration('vad_silence_ms'),
+            'vad_min_capture_ms': LaunchConfiguration('vad_min_capture_ms'),
             'vad_max_duration_sec': LaunchConfiguration('vad_max_duration_sec'),
+            'vad_debug': LaunchConfiguration('vad_debug'),
             'wake_cooldown_sec': LaunchConfiguration('wake_cooldown_sec'),
         }],
     )
@@ -133,7 +145,9 @@ def generate_launch_description():
         mic_device_index_arg,
         vad_energy_threshold_arg,
         vad_silence_ms_arg,
+        vad_min_capture_ms_arg,
         vad_max_duration_sec_arg,
+        vad_debug_arg,
         wake_cooldown_sec_arg,
         voice_commander,
         voice_control,
