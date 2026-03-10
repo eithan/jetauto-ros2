@@ -23,6 +23,8 @@ Usage::
         vad_silence_ms:=800
 """
 
+import os
+
 import launch
 import lifecycle_msgs.msg
 from ament_index_python.packages import get_package_share_directory
