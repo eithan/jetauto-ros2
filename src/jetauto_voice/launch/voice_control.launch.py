@@ -54,13 +54,13 @@ def generate_launch_description():
     )
     stt_device_arg = DeclareLaunchArgument(
         'stt_device',
-        default_value='cuda',
-        description='STT inference device: cuda or cpu',
+        default_value='cpu',
+        description='STT inference device: cuda or cpu (default: cpu — Jetson CTranslate2 is not CUDA-compiled)',
     )
     stt_compute_type_arg = DeclareLaunchArgument(
         'stt_compute_type',
-        default_value='float16',
-        description='faster-whisper compute type: float16, int8, float32',
+        default_value='int8',
+        description='faster-whisper compute type: float16, int8, float32 (default: int8 for CPU)',
     )
     mic_device_index_arg = DeclareLaunchArgument(
         'mic_device_index',

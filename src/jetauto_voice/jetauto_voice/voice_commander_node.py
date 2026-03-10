@@ -130,6 +130,7 @@ class VoiceCommanderNode(Node):
         self._shutdown_event = threading.Event()
         self._wake_word_detector = None
         self._stt_model = None
+        self._stt_actual_device = self._stt_device  # may change after fallback
 
         # -- Load models --
         self._init_wakeword()
@@ -146,7 +147,7 @@ class VoiceCommanderNode(Node):
         self.get_logger().info(
             f"VoiceCommanderNode ready — wake_word='{self._wake_word_model}' "
             f"(threshold={self._wake_word_threshold}), "
-            f"STT={self._stt_model_size}@{self._stt_device}"
+            f"STT={self._stt_model_size}@{self._stt_actual_device}"
         )
 
     # ------------------------------------------------------------------ #
@@ -154,20 +155,35 @@ class VoiceCommanderNode(Node):
     # ------------------------------------------------------------------ #
 
     def _init_wakeword(self) -> None:
-        """Load the openWakeWord model."""
+        """Load the openWakeWord model, downloading it first if needed."""
         try:
             from openwakeword.model import Model  # type: ignore[import]
+            from openwakeword.utils import download_models  # type: ignore[import]
+        except ImportError:
+            self.get_logger().error(
+                "openwakeword not installed! Run: pip3 install openwakeword"
+            )
+            return
 
+        # Models are NOT bundled with the pip package — download on first run.
+        self.get_logger().info(
+            f"Downloading openWakeWord model '{self._wake_word_model}' if needed..."
+        )
+        try:
+            download_models([self._wake_word_model])
+        except Exception as exc:
+            self.get_logger().warn(
+                f"Model download for '{self._wake_word_model}' failed ({exc}). "
+                "Will attempt to load from cache anyway."
+            )
+
+        try:
             self._wake_word_detector = Model(
                 wakeword_models=[self._wake_word_model],
                 inference_framework="onnx",
             )
             self.get_logger().info(
                 f"openWakeWord loaded: '{self._wake_word_model}'"
-            )
-        except ImportError:
-            self.get_logger().error(
-                "openwakeword not installed! Run: pip3 install openwakeword"
             )
         except Exception as exc:
             self.get_logger().error(f"openWakeWord init failed: {exc}")
@@ -207,6 +223,7 @@ class VoiceCommanderNode(Node):
                 device="cpu",
                 compute_type="int8",
             )
+            self._stt_actual_device = "cpu"
             self.get_logger().info(
                 f"faster-whisper CPU fallback: size={self._stt_model_size}, int8"
             )
