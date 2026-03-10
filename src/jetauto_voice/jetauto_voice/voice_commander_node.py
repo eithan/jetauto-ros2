@@ -122,13 +122,7 @@ class VoiceCommanderNode(Node):
         self.declare_parameter("stt_device", "cuda")
         self.declare_parameter("stt_compute_type", "float16")
         self.declare_parameter("mic_device_index", -1)
-        self.declare_parameter("vad_aggressiveness", 3)
-        self.declare_parameter("vad_drain_ms", 350)
-        self.declare_parameter("vad_speech_start_frames", 6)
-        self.declare_parameter("vad_speech_end_frames", 20)
-        self.declare_parameter("vad_min_speech_ms", 300)
-        self.declare_parameter("vad_listen_timeout_sec", 30.0)
-        self.declare_parameter("vad_max_duration_sec", 8.0)
+        self.declare_parameter("capture_duration_sec", 5.0)
         self.declare_parameter("wake_cooldown_sec", 5.0)
         self.declare_parameter("sample_rate", 16000)
 
@@ -139,13 +133,7 @@ class VoiceCommanderNode(Node):
         self._stt_device: str = self.get_parameter("stt_device").value
         self._stt_compute_type: str = self.get_parameter("stt_compute_type").value
         self._mic_device_index: int = self.get_parameter("mic_device_index").value
-        self._vad_aggressiveness: int = self.get_parameter("vad_aggressiveness").value
-        self._vad_drain_ms: int = self.get_parameter("vad_drain_ms").value
-        self._vad_speech_start_frames: int = self.get_parameter("vad_speech_start_frames").value
-        self._vad_speech_end_frames: int = self.get_parameter("vad_speech_end_frames").value
-        self._vad_min_speech_ms: int = self.get_parameter("vad_min_speech_ms").value
-        self._vad_listen_timeout_sec: float = self.get_parameter("vad_listen_timeout_sec").value
-        self._vad_max_duration_sec: float = self.get_parameter("vad_max_duration_sec").value
+        self._capture_duration: float = self.get_parameter("capture_duration_sec").value
         self._wake_cooldown_sec: float = self.get_parameter("wake_cooldown_sec").value
         self._sample_rate: int = self.get_parameter("sample_rate").value
 
@@ -363,22 +351,21 @@ class VoiceCommanderNode(Node):
 
             first_listen = False
 
-            audio_float = self._capture_with_vad(stream)
+            audio_float = self._capture(stream)
 
             if audio_float is None or len(audio_float) == 0:
-                # No speech within timeout — exit loop
-                self.get_logger().info("Listen timeout — returning to wake word")
+                self.get_logger().info("No audio — returning to wake word")
                 break
 
             text = self._transcribe(audio_float)
             if not text:
-                self.get_logger().info("Empty transcript — beeping to retry")
-                continue
+                self.get_logger().info("Empty transcript — returning to wake word")
+                break
 
-            # Filter Whisper hallucinations — retry rather than exit
+            # Filter Whisper hallucinations
             if text.lower().rstrip("?.!,") in _HALLUCINATIONS:
-                self.get_logger().info(f'Hallucination filtered: "{text}" — beeping to retry')
-                continue
+                self.get_logger().info(f'Hallucination filtered: "{text}" — returning to wake word')
+                break
 
             self.get_logger().info(f'Transcribed: "{text}"')
 
@@ -390,6 +377,24 @@ class VoiceCommanderNode(Node):
 
             # Dispatch intent; block until response TTS finishes, then loop
             self._dispatch_intent(text)
+
+    def _capture(self, stream) -> Optional[np.ndarray]:
+        """Capture a fixed-duration audio clip after wake word.
+
+        Args:
+            stream: Open sounddevice InputStream.
+
+        Returns:
+            float32 numpy array normalised to [-1.0, 1.0], or None on error.
+        """
+        samples = int(self._sample_rate * self._capture_duration)
+        self.get_logger().info(f"Capturing {self._capture_duration}s of audio...")
+        try:
+            audio_data, _ = stream.read(samples)
+            return audio_data.flatten().astype(np.float32) / 32768.0
+        except Exception as exc:
+            self.get_logger().error(f"Audio capture failed: {exc}")
+            return None
 
     def _play_beep(self, freq: float = 880.0, duration: float = 0.15, volume: float = 0.4) -> None:
         """Play a short sine-wave beep directly via sounddevice.
@@ -411,89 +416,7 @@ class VoiceCommanderNode(Node):
         except Exception as exc:
             self.get_logger().debug(f"Beep playback failed: {exc}")
 
-    def _capture_with_vad(self, stream) -> Optional[np.ndarray]:
-        """Capture speech using WebRTC VAD endpoint detection.
 
-        Reads 20ms frames (320 samples at 16kHz) and runs webrtcvad on each.
-        Returns audio from first speech frame through end-of-speech silence.
-        Returns None if speech never starts within the listen timeout.
-
-        Falls back to 5-second fixed capture if webrtcvad is unavailable.
-        """
-        # webrtcvad requires 10/20/30ms frames at 8/16/32kHz
-        # 20ms at 16kHz = 320 samples
-        VAD_FRAME_SAMPLES = 320
-
-        try:
-            import webrtcvad  # type: ignore[import]
-            vad = webrtcvad.Vad(self._vad_aggressiveness)
-        except ImportError:
-            self.get_logger().warn(
-                "webrtcvad not installed — using 5s fixed capture. "
-                "Run: pip3 install webrtcvad"
-            )
-            audio_data, _ = stream.read(int(self._sample_rate * 5.0))
-            return audio_data.flatten().astype(np.float32) / 32768.0
-
-        # Drain audio buffer to clear the tail of the wake word before VAD starts
-        drain_samples = int(self._vad_drain_ms * self._sample_rate / 1000)
-        stream.read(drain_samples)
-
-        timeout_frames = int(self._vad_listen_timeout_sec * self._sample_rate / VAD_FRAME_SAMPLES)
-        max_frames = int(self._vad_max_duration_sec * self._sample_rate / VAD_FRAME_SAMPLES)
-        min_speech_frames = max(1, self._vad_min_speech_ms // 20)  # 20ms per frame
-
-        audio_frames = []
-        speech_frames_total = 0
-        speech_run = 0    # consecutive speech frames
-        silence_run = 0   # consecutive silence frames after speech
-        speech_started = False
-
-        for i in range(max_frames):
-            if self._shutdown_event.is_set():
-                return None
-
-            chunk, _ = stream.read(VAD_FRAME_SAMPLES)
-            chunk_flat = chunk.flatten()
-            audio_frames.append(chunk_flat)
-
-            try:
-                is_speech = vad.is_speech(chunk_flat.tobytes(), self._sample_rate)
-            except Exception:
-                is_speech = False
-
-            if is_speech:
-                speech_run += 1
-                speech_frames_total += 1
-                silence_run = 0
-                if speech_run >= self._vad_speech_start_frames and not speech_started:
-                    speech_started = True
-                    self.get_logger().info("Speech detected — listening...")
-            else:
-                speech_run = 0
-                if speech_started:
-                    silence_run += 1
-                    if silence_run >= self._vad_speech_end_frames:
-                        elapsed_ms = len(audio_frames) * VAD_FRAME_SAMPLES * 1000 // self._sample_rate
-                        self.get_logger().info(f"*** DONE LISTENING — captured {elapsed_ms}ms, transcribing...")
-                        break
-                else:
-                    if i >= timeout_frames:
-                        self.get_logger().info("Listen timeout — no speech detected, returning to wake word")
-                        return None
-
-        if not audio_frames or not speech_started:
-            return None
-
-        # Require a minimum amount of actual speech to avoid transcribing noise
-        if speech_frames_total < min_speech_frames:
-            self.get_logger().info(
-                f"Too little speech ({speech_frames_total * 20}ms) — ignoring"
-            )
-            return None
-
-        audio = np.concatenate(audio_frames).astype(np.float32) / 32768.0
-        return audio
 
     # ------------------------------------------------------------------ #
     # STT
