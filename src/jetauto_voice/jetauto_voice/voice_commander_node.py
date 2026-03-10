@@ -116,11 +116,7 @@ class VoiceCommanderNode(Node):
         self.declare_parameter("stt_device", "cuda")
         self.declare_parameter("stt_compute_type", "float16")
         self.declare_parameter("mic_device_index", -1)
-        self.declare_parameter("vad_energy_threshold", 200)
-        self.declare_parameter("vad_silence_ms", 1200)
-        self.declare_parameter("vad_min_capture_ms", 2000)
-        self.declare_parameter("vad_max_duration_sec", 8.0)
-        self.declare_parameter("vad_debug", False)
+        self.declare_parameter("capture_duration_sec", 5.0)
         self.declare_parameter("wake_cooldown_sec", 3.0)
         self.declare_parameter("sample_rate", 16000)
 
@@ -131,11 +127,7 @@ class VoiceCommanderNode(Node):
         self._stt_device: str = self.get_parameter("stt_device").value
         self._stt_compute_type: str = self.get_parameter("stt_compute_type").value
         self._mic_device_index: int = self.get_parameter("mic_device_index").value
-        self._vad_energy_threshold: int = self.get_parameter("vad_energy_threshold").value
-        self._vad_silence_ms: int = self.get_parameter("vad_silence_ms").value
-        self._vad_min_capture_ms: int = self.get_parameter("vad_min_capture_ms").value
-        self._vad_max_duration_sec: float = self.get_parameter("vad_max_duration_sec").value
-        self._vad_debug: bool = self.get_parameter("vad_debug").value
+        self._capture_duration: float = self.get_parameter("capture_duration_sec").value
         self._wake_cooldown_sec: float = self.get_parameter("wake_cooldown_sec").value
         self._sample_rate: int = self.get_parameter("sample_rate").value
 
@@ -329,68 +321,24 @@ class VoiceCommanderNode(Node):
                     cooldown_remaining = cooldown_total
 
     def _handle_wake_word(self, stream) -> None:
-        """Capture an utterance after wake word using VAD endpoint detection.
-
-        Captures audio chunks until either:
-        - A sustained silence after speech is detected (normal end-of-utterance)
-        - The maximum duration is reached
-
-        This replaces the fixed-duration capture, giving natural sentence
-        boundaries regardless of how long the command takes to say.
+        """Capture a fixed-duration utterance after wake word and dispatch intent.
 
         Args:
             stream: Open sounddevice InputStream to read from.
         """
+        capture_samples = int(self._sample_rate * self._capture_duration)
+
         # Brief acknowledgment so the user knows we're listening
         self._publish_tts("Yes?")
-        self.get_logger().info("Listening for command (VAD endpoint)...")
 
-        # VAD settings derived from parameters
-        chunk_ms = _OWW_CHUNK_SAMPLES * 1000 // self._sample_rate  # ms per chunk (80ms)
-        silence_frames_needed = max(1, self._vad_silence_ms // chunk_ms)
-        min_frames_before_cutoff = max(1, self._vad_min_capture_ms // chunk_ms)
-        max_frames = int(self._vad_max_duration_sec * self._sample_rate / _OWW_CHUNK_SAMPLES)
-
-        audio_frames = []
-        silence_count = 0
-        speech_started = False
-
-        for _ in range(max_frames):
-            if self._shutdown_event.is_set():
-                break
-
-            chunk, _ = stream.read(_OWW_CHUNK_SAMPLES)
-            chunk_flat = chunk.flatten()
-            audio_frames.append(chunk_flat)
-
-            # Energy-based speech detection (RMS of int16 samples)
-            rms = float(np.sqrt(np.mean(chunk_flat.astype(np.float32) ** 2)))
-            is_speech = rms > self._vad_energy_threshold
-
-            if self._vad_debug:
-                self.get_logger().info(f"VAD rms={rms:.0f} speech={is_speech}")
-
-            if is_speech:
-                speech_started = True
-                silence_count = 0
-            else:
-                if speech_started:
-                    silence_count += 1
-                    # Only allow early cutoff after minimum capture duration
-                    past_minimum = len(audio_frames) >= min_frames_before_cutoff
-                    if silence_count >= silence_frames_needed and past_minimum:
-                        elapsed_ms = len(audio_frames) * chunk_ms
-                        self.get_logger().info(
-                            f"Speech ended — captured {elapsed_ms}ms of audio"
-                        )
-                        break
-
-        if not audio_frames:
-            return
+        self.get_logger().info(
+            f"Capturing {self._capture_duration}s of audio..."
+        )
+        audio_data, _ = stream.read(capture_samples)
 
         # Normalize int16 → float32 in [-1.0, 1.0] for faster-whisper
         audio_float: np.ndarray = (
-            np.concatenate(audio_frames).astype(np.float32) / 32768.0
+            audio_data.flatten().astype(np.float32) / 32768.0
         )
 
         text = self._transcribe(audio_float)

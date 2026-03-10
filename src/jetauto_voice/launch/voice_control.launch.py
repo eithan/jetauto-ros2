@@ -68,30 +68,10 @@ def generate_launch_description():
         default_value='-1',
         description='ALSA mic device index (-1 = system default)',
     )
-    vad_energy_threshold_arg = DeclareLaunchArgument(
-        'vad_energy_threshold',
-        default_value='200',
-        description='RMS energy threshold for speech detection (0-32768). Raise in noisy environments.',
-    )
-    vad_silence_ms_arg = DeclareLaunchArgument(
-        'vad_silence_ms',
-        default_value='1200',
-        description='Milliseconds of silence that triggers end-of-utterance.',
-    )
-    vad_min_capture_ms_arg = DeclareLaunchArgument(
-        'vad_min_capture_ms',
-        default_value='2000',
-        description='Minimum ms to capture before silence cutoff is allowed.',
-    )
-    vad_max_duration_sec_arg = DeclareLaunchArgument(
-        'vad_max_duration_sec',
-        default_value='8.0',
-        description='Maximum seconds to capture before giving up.',
-    )
-    vad_debug_arg = DeclareLaunchArgument(
-        'vad_debug',
-        default_value='false',
-        description='Log RMS values every chunk for energy threshold calibration.',
+    capture_duration_arg = DeclareLaunchArgument(
+        'capture_duration_sec',
+        default_value='5.0',
+        description='Seconds of audio to capture after wake word.',
     )
     wake_cooldown_sec_arg = DeclareLaunchArgument(
         'wake_cooldown_sec',
@@ -116,11 +96,7 @@ def generate_launch_description():
             'stt_device': LaunchConfiguration('stt_device'),
             'stt_compute_type': LaunchConfiguration('stt_compute_type'),
             'mic_device_index': LaunchConfiguration('mic_device_index'),
-            'vad_energy_threshold': LaunchConfiguration('vad_energy_threshold'),
-            'vad_silence_ms': LaunchConfiguration('vad_silence_ms'),
-            'vad_min_capture_ms': LaunchConfiguration('vad_min_capture_ms'),
-            'vad_max_duration_sec': LaunchConfiguration('vad_max_duration_sec'),
-            'vad_debug': LaunchConfiguration('vad_debug'),
+            'capture_duration_sec': LaunchConfiguration('capture_duration_sec'),
             'wake_cooldown_sec': LaunchConfiguration('wake_cooldown_sec'),
         }],
     )
@@ -143,11 +119,7 @@ def generate_launch_description():
         stt_device_arg,
         stt_compute_type_arg,
         mic_device_index_arg,
-        vad_energy_threshold_arg,
-        vad_silence_ms_arg,
-        vad_min_capture_ms_arg,
-        vad_max_duration_sec_arg,
-        vad_debug_arg,
+        capture_duration_arg,
         wake_cooldown_sec_arg,
         voice_commander,
         voice_control,
