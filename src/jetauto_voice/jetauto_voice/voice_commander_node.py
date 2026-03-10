@@ -346,6 +346,12 @@ class VoiceCommanderNode(Node):
             self.get_logger().info("STT produced empty transcript — ignoring")
             return
 
+        # Filter known Whisper hallucinations on near-silent audio
+        from jetauto_voice.intent_mapper import _HALLUCINATIONS
+        if text.lower().rstrip("?.!,") in _HALLUCINATIONS:
+            self.get_logger().info(f'Whisper hallucination filtered: "{text}"')
+            return
+
         self.get_logger().info(f'Transcribed: "{text}"')
         self._dispatch_intent(text)
 

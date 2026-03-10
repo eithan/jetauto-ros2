@@ -152,6 +152,46 @@ COCO_CLASSES: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
+# Polite/filler prefixes to strip before intent matching
+# ---------------------------------------------------------------------------
+# Handles natural speech like "please find the person" or "Jarvis find the bottle"
+# ---------------------------------------------------------------------------
+_PREFIX_RE = re.compile(
+    r"^(?:please|jarvis|hey\s+jarvis|ok\s+jarvis|okay\s+jarvis|robot|hey|ok|okay|now|just|can\s+you|could\s+you|would\s+you)\s+",
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Known Whisper hallucination phrases to reject outright
+# ---------------------------------------------------------------------------
+# Whisper commonly outputs these on near-silent audio; they produce false intents.
+# ---------------------------------------------------------------------------
+_HALLUCINATIONS: set[str] = {
+    "thank you",
+    "thank you.",
+    "thanks",
+    "you",
+    ".",
+    "",
+    "goodbye",
+    "bye",
+    "bye bye",
+    "yes",
+    "no",
+    "okay",
+    "ok",
+    "um",
+    "uh",
+    "hmm",
+    "hm",
+    "ah",
+    "oh",
+    "subscribe",
+    "like and subscribe",
+    "the",
+}
+
+# ---------------------------------------------------------------------------
 # Intent patterns
 # ---------------------------------------------------------------------------
 # Each pattern captures the raw object name in group 1.
@@ -204,6 +244,13 @@ def extract_target(text: str) -> Optional[tuple[str, str]]:
     text = text.strip()
     if not text:
         return None
+
+    # Reject known Whisper hallucination phrases
+    if text.lower().rstrip("?.!,") in _HALLUCINATIONS:
+        return None
+
+    # Strip polite/filler prefixes ("please find..." → "find...")
+    text = _PREFIX_RE.sub("", text).strip()
 
     raw_object = _match_intent(text)
     if raw_object is None:
