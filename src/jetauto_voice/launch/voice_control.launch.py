@@ -50,8 +50,8 @@ def generate_launch_description():
     )
     stt_model_size_arg = DeclareLaunchArgument(
         'stt_model_size',
-        default_value='base',
-        description='faster-whisper model size: tiny, base, small, medium, large-v2',
+        default_value='base.en',
+        description='faster-whisper model size: tiny.en, base.en, small.en, medium, large-v2 (.en = English-only, more accurate)',
     )
     stt_device_arg = DeclareLaunchArgument(
         'stt_device',
@@ -68,10 +68,20 @@ def generate_launch_description():
         default_value='-1',
         description='ALSA mic device index (-1 = system default)',
     )
-    capture_duration_arg = DeclareLaunchArgument(
-        'capture_duration_sec',
-        default_value='5.0',
-        description='Seconds of audio to capture after wake word.',
+    vad_aggressiveness_arg = DeclareLaunchArgument(
+        'vad_aggressiveness',
+        default_value='2',
+        description='WebRTC VAD aggressiveness 0-3 (0=permissive, 3=aggressive). Higher filters more non-speech.',
+    )
+    vad_speech_end_frames_arg = DeclareLaunchArgument(
+        'vad_speech_end_frames',
+        default_value='25',
+        description='Consecutive silence frames (20ms each) to trigger end-of-speech. Default 25 = 500ms.',
+    )
+    vad_listen_timeout_sec_arg = DeclareLaunchArgument(
+        'vad_listen_timeout_sec',
+        default_value='4.0',
+        description='Seconds to wait for speech to start before giving up.',
     )
     wake_cooldown_sec_arg = DeclareLaunchArgument(
         'wake_cooldown_sec',
@@ -96,7 +106,9 @@ def generate_launch_description():
             'stt_device': LaunchConfiguration('stt_device'),
             'stt_compute_type': LaunchConfiguration('stt_compute_type'),
             'mic_device_index': LaunchConfiguration('mic_device_index'),
-            'capture_duration_sec': LaunchConfiguration('capture_duration_sec'),
+            'vad_aggressiveness': LaunchConfiguration('vad_aggressiveness'),
+            'vad_speech_end_frames': LaunchConfiguration('vad_speech_end_frames'),
+            'vad_listen_timeout_sec': LaunchConfiguration('vad_listen_timeout_sec'),
             'wake_cooldown_sec': LaunchConfiguration('wake_cooldown_sec'),
         }],
     )
@@ -119,7 +131,9 @@ def generate_launch_description():
         stt_device_arg,
         stt_compute_type_arg,
         mic_device_index_arg,
-        capture_duration_arg,
+        vad_aggressiveness_arg,
+        vad_speech_end_frames_arg,
+        vad_listen_timeout_sec_arg,
         wake_cooldown_sec_arg,
         voice_commander,
         voice_control,

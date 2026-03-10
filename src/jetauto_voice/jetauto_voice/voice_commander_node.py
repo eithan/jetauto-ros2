@@ -112,11 +112,15 @@ class VoiceCommanderNode(Node):
         # -- Declare parameters --
         self.declare_parameter("wake_word_model", "hey_jarvis")
         self.declare_parameter("wake_word_threshold", 0.5)
-        self.declare_parameter("stt_model_size", "base")
+        self.declare_parameter("stt_model_size", "base.en")
         self.declare_parameter("stt_device", "cuda")
         self.declare_parameter("stt_compute_type", "float16")
         self.declare_parameter("mic_device_index", -1)
-        self.declare_parameter("capture_duration_sec", 5.0)
+        self.declare_parameter("vad_aggressiveness", 2)
+        self.declare_parameter("vad_speech_start_frames", 3)
+        self.declare_parameter("vad_speech_end_frames", 25)
+        self.declare_parameter("vad_listen_timeout_sec", 4.0)
+        self.declare_parameter("vad_max_duration_sec", 8.0)
         self.declare_parameter("wake_cooldown_sec", 3.0)
         self.declare_parameter("sample_rate", 16000)
 
@@ -127,7 +131,11 @@ class VoiceCommanderNode(Node):
         self._stt_device: str = self.get_parameter("stt_device").value
         self._stt_compute_type: str = self.get_parameter("stt_compute_type").value
         self._mic_device_index: int = self.get_parameter("mic_device_index").value
-        self._capture_duration: float = self.get_parameter("capture_duration_sec").value
+        self._vad_aggressiveness: int = self.get_parameter("vad_aggressiveness").value
+        self._vad_speech_start_frames: int = self.get_parameter("vad_speech_start_frames").value
+        self._vad_speech_end_frames: int = self.get_parameter("vad_speech_end_frames").value
+        self._vad_listen_timeout_sec: float = self.get_parameter("vad_listen_timeout_sec").value
+        self._vad_max_duration_sec: float = self.get_parameter("vad_max_duration_sec").value
         self._wake_cooldown_sec: float = self.get_parameter("wake_cooldown_sec").value
         self._sample_rate: int = self.get_parameter("sample_rate").value
 
@@ -321,25 +329,23 @@ class VoiceCommanderNode(Node):
                     cooldown_remaining = cooldown_total
 
     def _handle_wake_word(self, stream) -> None:
-        """Capture a fixed-duration utterance after wake word and dispatch intent.
+        """Capture an utterance using WebRTC VAD for precise endpoint detection.
+
+        Uses webrtcvad (Google's WebRTC voice activity detector) to detect
+        when speech starts and ends, then immediately transcribes. Falls back
+        to a 5-second fixed capture if webrtcvad is not installed.
 
         Args:
             stream: Open sounddevice InputStream to read from.
         """
-        capture_samples = int(self._sample_rate * self._capture_duration)
-
-        # Brief acknowledgment so the user knows we're listening
+        # Brief acknowledgment
         self._publish_tts("Yes?")
 
-        self.get_logger().info(
-            f"Capturing {self._capture_duration}s of audio..."
-        )
-        audio_data, _ = stream.read(capture_samples)
+        audio_float = self._capture_with_vad(stream)
 
-        # Normalize int16 → float32 in [-1.0, 1.0] for faster-whisper
-        audio_float: np.ndarray = (
-            audio_data.flatten().astype(np.float32) / 32768.0
-        )
+        if audio_float is None or len(audio_float) == 0:
+            self.get_logger().info("No speech detected — returning to wake word listen")
+            return
 
         text = self._transcribe(audio_float)
         if not text:
@@ -354,6 +360,78 @@ class VoiceCommanderNode(Node):
 
         self.get_logger().info(f'Transcribed: "{text}"')
         self._dispatch_intent(text)
+
+    def _capture_with_vad(self, stream) -> Optional[np.ndarray]:
+        """Capture speech using WebRTC VAD endpoint detection.
+
+        Reads 20ms frames (320 samples at 16kHz) and runs webrtcvad on each.
+        Returns audio from first speech frame through end-of-speech silence.
+        Returns None if speech never starts within the listen timeout.
+
+        Falls back to 5-second fixed capture if webrtcvad is unavailable.
+        """
+        # webrtcvad requires 10/20/30ms frames at 8/16/32kHz
+        # 20ms at 16kHz = 320 samples
+        VAD_FRAME_SAMPLES = 320
+
+        try:
+            import webrtcvad  # type: ignore[import]
+            vad = webrtcvad.Vad(self._vad_aggressiveness)
+        except ImportError:
+            self.get_logger().warn(
+                "webrtcvad not installed — using 5s fixed capture. "
+                "Run: pip3 install webrtcvad"
+            )
+            audio_data, _ = stream.read(int(self._sample_rate * 5.0))
+            return audio_data.flatten().astype(np.float32) / 32768.0
+
+        timeout_frames = int(self._vad_listen_timeout_sec * self._sample_rate / VAD_FRAME_SAMPLES)
+        max_frames = int(self._vad_max_duration_sec * self._sample_rate / VAD_FRAME_SAMPLES)
+
+        audio_frames = []
+        speech_run = 0    # consecutive speech frames
+        silence_run = 0   # consecutive silence frames after speech
+        speech_started = False
+
+        self.get_logger().info("Listening for speech (VAD)...")
+
+        for i in range(max_frames):
+            if self._shutdown_event.is_set():
+                return None
+
+            chunk, _ = stream.read(VAD_FRAME_SAMPLES)
+            chunk_flat = chunk.flatten()
+            audio_frames.append(chunk_flat)
+
+            try:
+                is_speech = vad.is_speech(chunk_flat.tobytes(), self._sample_rate)
+            except Exception:
+                is_speech = False
+
+            if is_speech:
+                speech_run += 1
+                silence_run = 0
+                if speech_run >= self._vad_speech_start_frames:
+                    speech_started = True
+            else:
+                speech_run = 0
+                if speech_started:
+                    silence_run += 1
+                    if silence_run >= self._vad_speech_end_frames:
+                        elapsed_ms = len(audio_frames) * VAD_FRAME_SAMPLES * 1000 // self._sample_rate
+                        self.get_logger().info(f"Speech ended — captured {elapsed_ms}ms")
+                        break
+                else:
+                    # Still waiting for speech to start
+                    if i >= timeout_frames:
+                        self.get_logger().info("Listen timeout — no speech detected")
+                        return None
+
+        if not audio_frames or not speech_started:
+            return None
+
+        audio = np.concatenate(audio_frames).astype(np.float32) / 32768.0
+        return audio
 
     # ------------------------------------------------------------------ #
     # STT
