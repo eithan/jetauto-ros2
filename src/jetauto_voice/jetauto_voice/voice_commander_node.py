@@ -117,7 +117,7 @@ class VoiceCommanderNode(Node):
 
         # -- Declare parameters --
         self.declare_parameter("wake_word_model", "hey_jarvis")
-        self.declare_parameter("wake_word_threshold", 0.5)
+        self.declare_parameter("wake_word_threshold", 0.65)
         self.declare_parameter("stt_model_size", "base.en")
         self.declare_parameter("stt_device", "cuda")
         self.declare_parameter("stt_compute_type", "float16")
@@ -127,9 +127,9 @@ class VoiceCommanderNode(Node):
         self.declare_parameter("vad_speech_start_frames", 6)
         self.declare_parameter("vad_speech_end_frames", 20)
         self.declare_parameter("vad_min_speech_ms", 300)
-        self.declare_parameter("vad_listen_timeout_sec", 4.0)
+        self.declare_parameter("vad_listen_timeout_sec", 30.0)
         self.declare_parameter("vad_max_duration_sec", 8.0)
-        self.declare_parameter("wake_cooldown_sec", 3.0)
+        self.declare_parameter("wake_cooldown_sec", 5.0)
         self.declare_parameter("sample_rate", 16000)
 
         # -- Read parameters --
@@ -366,18 +366,19 @@ class VoiceCommanderNode(Node):
             audio_float = self._capture_with_vad(stream)
 
             if audio_float is None or len(audio_float) == 0:
-                self.get_logger().info("No speech — returning to wake word")
+                # No speech within timeout — exit loop
+                self.get_logger().info("Listen timeout — returning to wake word")
                 break
 
             text = self._transcribe(audio_float)
             if not text:
-                self.get_logger().info("Empty transcript — returning to wake word")
-                break
+                self.get_logger().info("Empty transcript — beeping to retry")
+                continue
 
-            # Filter Whisper hallucinations
+            # Filter Whisper hallucinations — retry rather than exit
             if text.lower().rstrip("?.!,") in _HALLUCINATIONS:
-                self.get_logger().info(f'Hallucination filtered: "{text}" — returning to wake word')
-                break
+                self.get_logger().info(f'Hallucination filtered: "{text}" — beeping to retry')
+                continue
 
             self.get_logger().info(f'Transcribed: "{text}"')
 

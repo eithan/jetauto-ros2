@@ -52,7 +52,7 @@ def generate_launch_description():
     )
     wake_word_threshold_arg = DeclareLaunchArgument(
         'wake_word_threshold',
-        default_value='0.5',
+        default_value='0.65',
         description='Wake word detection threshold [0.0, 1.0]',
     )
     stt_model_size_arg = DeclareLaunchArgument(
@@ -87,12 +87,12 @@ def generate_launch_description():
     )
     vad_listen_timeout_sec_arg = DeclareLaunchArgument(
         'vad_listen_timeout_sec',
-        default_value='4.0',
+        default_value='30.0',
         description='Seconds to wait for speech to start before giving up.',
     )
     wake_cooldown_sec_arg = DeclareLaunchArgument(
         'wake_cooldown_sec',
-        default_value='3.0',
+        default_value='5.0',
         description='Seconds to suppress wake word re-triggering after a detection.',
     )
 
