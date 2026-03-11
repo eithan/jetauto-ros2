@@ -6,9 +6,14 @@ fully-offline voice commander (voice_commander_node).  By default only the
 offline commander is started.  Set the ``use_iflytek`` launch argument to
 ``true`` to start the legacy bridge instead (requires asr_node running).
 
+Also launches detector_node (jetauto_vision) so that "start vision" /
+"stop vision" voice commands and find-object intents actually work — the
+voice commander publishes to /jetauto/detection/enable and
+/jetauto/detection/target, which detector_node subscribes to.
+
 Usage::
 
-    # Offline commander (default — no iFlyTek needed):
+    # Offline commander + vision (default — no iFlyTek needed):
     ros2 launch jetauto_voice voice_control.launch.py
 
     # Legacy iFlyTek bridge:
@@ -18,9 +23,7 @@ Usage::
     ros2 launch jetauto_voice voice_control.launch.py \\
         wake_word_model:=alexa \\
         wake_word_threshold:=0.4 \\
-        stt_model_size:=small \\
-        vad_energy_threshold:=400 \\
-        vad_silence_ms:=800
+        stt_model_size:=small
 """
 
 import os
@@ -130,6 +133,42 @@ def generate_launch_description():
         condition=IfCondition(use_iflytek),
     )
 
+    # -- Vision detector node (lifecycle) — handles /jetauto/detection/enable + /target --
+    vision_config = os.path.join(
+        get_package_share_directory('jetauto_vision'),
+        'config',
+        'vision_params.yaml',
+    )
+    detector = LifecycleNode(
+        package='jetauto_vision',
+        executable='detector_node',
+        name='detector_node',
+        namespace='',
+        parameters=[vision_config],
+        output='screen',
+        emulate_tty=True,
+    )
+    detector_configure = launch.actions.EmitEvent(
+        event=ChangeState(
+            lifecycle_node_matcher=launch.events.matches_action(detector),
+            transition_id=lifecycle_msgs.msg.Transition.TRANSITION_CONFIGURE,
+        )
+    )
+    detector_activate = launch.actions.RegisterEventHandler(
+        OnStateTransition(
+            target_lifecycle_node=detector,
+            goal_state='inactive',
+            entities=[
+                launch.actions.EmitEvent(
+                    event=ChangeState(
+                        lifecycle_node_matcher=launch.events.matches_action(detector),
+                        transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
+                    )
+                ),
+            ],
+        )
+    )
+
     # -- TTS node (lifecycle) — speaks responses aloud --
     tts_config = os.path.join(
         get_package_share_directory('jetauto_tts'),
@@ -166,6 +205,45 @@ def generate_launch_description():
         )
     )
 
+    # -- Detector node (lifecycle) — YOLO object detection --
+    # Started alongside voice so that "start vision" / "find X" commands work.
+    # Voice commander publishes to /jetauto/detection/enable and
+    # /jetauto/detection/target which this node subscribes to.
+    vision_config = os.path.join(
+        get_package_share_directory('jetauto_vision'),
+        'config',
+        'vision_params.yaml',
+    )
+    detector = LifecycleNode(
+        package='jetauto_vision',
+        executable='detector_node',
+        name='detector_node',
+        namespace='',
+        parameters=[vision_config],
+        output='screen',
+        emulate_tty=True,
+    )
+    detector_configure = launch.actions.EmitEvent(
+        event=ChangeState(
+            lifecycle_node_matcher=launch.events.matches_action(detector),
+            transition_id=lifecycle_msgs.msg.Transition.TRANSITION_CONFIGURE,
+        )
+    )
+    detector_activate = launch.actions.RegisterEventHandler(
+        OnStateTransition(
+            target_lifecycle_node=detector,
+            goal_state='inactive',
+            entities=[
+                launch.actions.EmitEvent(
+                    event=ChangeState(
+                        lifecycle_node_matcher=launch.events.matches_action(detector),
+                        transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
+                    )
+                ),
+            ],
+        )
+    )
+
     return LaunchDescription([
         use_iflytek_arg,
         wake_word_model_arg,
@@ -183,4 +261,7 @@ def generate_launch_description():
         tts,
         tts_configure,
         tts_activate,
+        detector,
+        detector_configure,
+        detector_activate,
     ])

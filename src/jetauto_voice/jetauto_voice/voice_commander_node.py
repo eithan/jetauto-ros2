@@ -375,17 +375,18 @@ class VoiceCommanderNode(Node):
 
         # Greeting on first activation — block until TTS finishes
         self._speak_blocking("Yes, how may I help you?")
-        self.get_logger().info("*** SPEAK NOW (greeting) ***")
 
         first_listen = True
         drain_ms = self._vad_drain_ms + 200  # extra buffer for TTS reverb
+        noise_retries = 0
+        max_noise_retries = 3
 
         while not self._shutdown_event.is_set():
             if not first_listen:
                 # Drain mic to clear TTS echo before beep + VAD
                 self._drain_mic(stream, drain_ms)
                 self._play_beep()
-                self.get_logger().info("*** SPEAK NOW ***")
+                self.get_logger().info("SPEAK NOW")
 
             first_listen = False
 
@@ -398,8 +399,19 @@ class VoiceCommanderNode(Node):
 
             if len(audio_float) == 0:
                 # Too-short / noise burst — beep and try again
-                self.get_logger().info("Noise detected — listening again")
+                noise_retries += 1
+                self.get_logger().info(
+                    f"Noise detected — listening again ({noise_retries}/{max_noise_retries})"
+                )
+                if noise_retries >= max_noise_retries:
+                    self.get_logger().info(
+                        "Too many noise retries — returning to wake word"
+                    )
+                    break
                 continue
+
+            # Reset noise counter on successful capture
+            noise_retries = 0
 
             text = self._transcribe(audio_float)
             if not text:
@@ -474,8 +486,6 @@ class VoiceCommanderNode(Node):
         silence_run = 0
         speech_frame_count = 0
         speech_started = False
-
-        self.get_logger().info("*** SPEAK NOW ***")
 
         for i in range(max_frames):
             if self._shutdown_event.is_set():
