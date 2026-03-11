@@ -125,7 +125,7 @@ class VoiceCommanderNode(Node):
         self.declare_parameter("stt_compute_type", "float16")
         self.declare_parameter("mic_device_index", -1)
         self.declare_parameter("vad_aggressiveness", 3)
-        self.declare_parameter("vad_drain_ms", 600)
+        self.declare_parameter("vad_drain_ms", 1200)
         self.declare_parameter("vad_speech_start_frames", 6)
         self.declare_parameter("vad_speech_end_frames", 30)
         self.declare_parameter("vad_min_speech_ms", 400)
@@ -244,10 +244,24 @@ class VoiceCommanderNode(Node):
             self.get_logger().error(f"openWakeWord init failed: {exc}")
 
     def _init_stt(self) -> None:
-        """Load the faster-whisper STT model, with automatic CPU fallback."""
+        """Load the faster-whisper STT model, with automatic CPU fallback.
+
+        Temporarily lifts HF_HUB_OFFLINE so the model can be downloaded on
+        first use, then restores offline mode once it's cached locally.
+        """
         try:
             from faster_whisper import WhisperModel  # type: ignore[import]
+        except ImportError:
+            self.get_logger().error(
+                "faster-whisper not installed! Run: pip3 install faster-whisper"
+            )
+            return
 
+        # Allow network for first-time model download
+        saved_offline = os.environ.pop("HF_HUB_OFFLINE", None)
+        os.environ.pop("TRANSFORMERS_OFFLINE", None)
+
+        try:
             self._stt_model = WhisperModel(
                 self._stt_model_size,
                 device=self._stt_device,
@@ -257,16 +271,17 @@ class VoiceCommanderNode(Node):
                 f"faster-whisper loaded: size={self._stt_model_size}, "
                 f"device={self._stt_device}, compute={self._stt_compute_type}"
             )
-        except ImportError:
-            self.get_logger().error(
-                "faster-whisper not installed! Run: pip3 install faster-whisper"
-            )
         except Exception as exc:
             self.get_logger().warn(
                 f"faster-whisper on {self._stt_device} failed ({exc}) — "
                 "trying CPU/int8 fallback"
             )
             self._init_stt_cpu_fallback()
+        finally:
+            # Restore offline mode — model is cached now
+            if saved_offline is not None:
+                os.environ["HF_HUB_OFFLINE"] = saved_offline
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
     def _init_stt_cpu_fallback(self) -> None:
         """Fallback: load faster-whisper on CPU with int8 quantization."""
@@ -381,7 +396,7 @@ class VoiceCommanderNode(Node):
         self._speak_blocking("Yes, how may I help you?")
 
         first_listen = True
-        drain_ms = self._vad_drain_ms + 200  # extra buffer for TTS reverb
+        drain_ms = self._vad_drain_ms + 500  # extra buffer for TTS reverb
         noise_retries = 0
         max_noise_retries = 3
 
@@ -439,20 +454,22 @@ class VoiceCommanderNode(Node):
             self._dispatch_intent(text)
 
     def _drain_mic(self, stream, ms: int) -> None:
-        """Read and discard audio from the mic stream for the given duration.
+        """Read and discard mic audio for exactly `ms` wall-clock milliseconds.
 
-        Used to flush TTS echo / wake word tail from the mic buffer before
-        opening VAD, preventing the robot from hearing its own voice.
+        Uses wall-clock time (not sample count) to guarantee the full duration
+        is waited even when the stream's internal buffer is pre-filled with
+        stale audio from while we were blocked in TTS.
 
         Args:
             stream: Open sounddevice InputStream.
-            ms: Milliseconds of audio to discard.
+            ms: Milliseconds to drain.
         """
-        samples = int(ms * self._sample_rate / 1000)
-        try:
-            stream.read(samples)
-        except Exception:
-            pass
+        deadline = time.time() + ms / 1000.0
+        while time.time() < deadline and not self._shutdown_event.is_set():
+            try:
+                stream.read(_OWW_CHUNK_SAMPLES)  # 80ms chunks, matches stream blocksize
+            except Exception:
+                time.sleep(0.01)
 
     def _capture_vad(self, stream) -> Optional[np.ndarray]:
         """Capture speech using WebRTC VAD with automatic start/end detection.
@@ -484,9 +501,11 @@ class VoiceCommanderNode(Node):
                 break
             stream.read(VAD_FRAME_SAMPLES)
 
-        # Drain buffer: clears wake word tail / TTS echo before VAD starts
-        drain_samples = int(self._vad_drain_ms * self._sample_rate / 1000)
-        stream.read(drain_samples)
+        # Drain buffer in real-time — wall-clock wait, not sample count,
+        # so stale buffered audio doesn't make this return instantly.
+        drain_deadline = time.time() + self._vad_drain_ms / 1000.0
+        while time.time() < drain_deadline and not self._shutdown_event.is_set():
+            stream.read(VAD_FRAME_SAMPLES)
 
         timeout_frames = int(self._vad_listen_timeout_sec * 1000 / VAD_FRAME_MS)
         max_frames = int(self._vad_max_duration_sec * 1000 / VAD_FRAME_MS)
