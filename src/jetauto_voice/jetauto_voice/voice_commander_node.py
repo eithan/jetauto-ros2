@@ -126,7 +126,7 @@ class VoiceCommanderNode(Node):
         self.declare_parameter("mic_device_index", -1)
         self.declare_parameter("vad_aggressiveness", 3)
         self.declare_parameter("vad_drain_ms", 600)
-        self.declare_parameter("vad_speech_start_frames", 4)
+        self.declare_parameter("vad_speech_start_frames", 6)
         self.declare_parameter("vad_speech_end_frames", 30)
         self.declare_parameter("vad_min_speech_ms", 400)
         self.declare_parameter("vad_listen_timeout_sec", 10.0)
@@ -391,9 +391,15 @@ class VoiceCommanderNode(Node):
 
             audio_float = self._capture_vad(stream)
 
-            if audio_float is None or len(audio_float) == 0:
-                self.get_logger().info("No audio — returning to wake word")
+            if audio_float is None:
+                # True timeout — no speech detected for 10s, user is done
+                self.get_logger().info("Listen timeout — returning to wake word")
                 break
+
+            if len(audio_float) == 0:
+                # Too-short / noise burst — beep and try again
+                self.get_logger().info("Noise detected — listening again")
+                continue
 
             text = self._transcribe(audio_float)
             if not text:
@@ -504,13 +510,15 @@ class VoiceCommanderNode(Node):
                     return None
 
         if not speech_started:
+            # True timeout — no speech detected at all
             return None
 
         if speech_frame_count < min_speech_frames:
             self.get_logger().info(
                 f"Too short ({speech_frame_count * VAD_FRAME_MS}ms actual speech) — ignoring"
             )
-            return None
+            # Return empty array to signal "noise, not timeout" — caller will retry
+            return np.array([], dtype=np.float32)
 
         return np.concatenate(audio_frames).astype(np.float32) / 32768.0
 
