@@ -427,21 +427,21 @@ class VoiceCommanderNode(Node):
             audio_float = self._capture_vad(stream)
 
             if audio_float is None:
-                # True timeout — no speech detected for 10s, user is done
+                # True silence timeout — no speech at all, user is done
                 self.get_logger().info("Listen timeout — returning to wake word")
                 break
 
             if len(audio_float) == 0:
-                # Too-short / noise burst — beep and try again
+                # Too-short / noise burst — retry (don't exit)
                 noise_retries += 1
                 self.get_logger().info(
                     f"Noise detected — listening again ({noise_retries}/{max_noise_retries})"
                 )
                 if noise_retries >= max_noise_retries:
-                    self.get_logger().info(
-                        "Too many noise retries — returning to wake word"
-                    )
-                    break
+                    # Too much noise — ask user to try again and reset
+                    self.get_logger().info("Too many noise retries — asking to repeat")
+                    self._speak_blocking("I'm having trouble hearing you. Please try again.")
+                    noise_retries = 0
                 continue
 
             # Reset noise counter on successful capture
@@ -449,13 +449,14 @@ class VoiceCommanderNode(Node):
 
             text = self._transcribe(audio_float)
             if not text:
-                self.get_logger().info("Empty transcript — returning to wake word")
-                break
+                # Empty transcript — retry silently (don't exit)
+                self.get_logger().info("Empty transcript — retrying")
+                continue
 
-            # Filter Whisper hallucinations
+            # Filter Whisper hallucinations — retry silently
             if text.lower().rstrip("?.!,") in _HALLUCINATIONS:
-                self.get_logger().info(f'Hallucination filtered: "{text}" — returning to wake word')
-                break
+                self.get_logger().info(f'Hallucination filtered: "{text}" — retrying')
+                continue
 
             self.get_logger().info(f'Transcribed: "{text}"')
 
@@ -705,17 +706,21 @@ class VoiceCommanderNode(Node):
         self._tts_speaking = msg.data
 
     def _speak_blocking(self, text: str) -> None:
-        """Publish TTS and block until the TTS node signals it has finished.
+        """Publish TTS and block until speech is guaranteed to have finished.
 
-        Waits up to 1 s for the TTS node to start (handles ROS dispatch
-        latency + pyttsx3 queue pickup), then waits for it to finish.
-        Falls back to a time-estimate if /tts/speaking never fires
-        (e.g. TTS node not running).
+        Uses /tts/speaking flag when available, but always enforces a minimum
+        floor based on word count — pyttsx3 on Jetson sometimes returns from
+        runAndWait() before audio has fully played out.
 
         Args:
             text: Text to speak.
         """
         self._publish_tts(text)
+        call_time = time.time()
+
+        # Floor estimate: words / 2.5 WPS + 0.8s buffer for pyttsx3 latency
+        words = len(text.split())
+        min_wait_sec = max(1.5, words / 2.5 + 0.8)
 
         # Wait for TTS to START (up to 1.5 s for ROS dispatch + queue)
         start_deadline = time.time() + 1.5
@@ -731,11 +736,11 @@ class VoiceCommanderNode(Node):
                 if self._shutdown_event.is_set():
                     return
                 time.sleep(0.05)
-        else:
-            # /tts/speaking never fired — fall back to time estimate
-            words = len(text.split())
-            estimated_sec = max(0.8, words / 2.5 + 0.5)
-            time.sleep(estimated_sec)
+
+        # Always enforce minimum — handles pyttsx3 early runAndWait() return
+        elapsed = time.time() - call_time
+        if elapsed < min_wait_sec:
+            time.sleep(min_wait_sec - elapsed)
 
     def _publish_detection_enable(self, enabled: bool) -> None:
         """Publish to /jetauto/detection/enable."""
