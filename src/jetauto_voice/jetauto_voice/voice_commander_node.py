@@ -123,7 +123,7 @@ class VoiceCommanderNode(Node):
         self.declare_parameter("stt_model_size", "tiny.en")
         self.declare_parameter("stt_device", "cuda")
         self.declare_parameter("stt_compute_type", "float16")
-        self.declare_parameter("mic_device_index", -1)
+        self.declare_parameter("mic_device_index", 1)  # XFM-DP-V0.0.18 — JetAuto built-in mic
         self.declare_parameter("vad_aggressiveness", 1)
         self.declare_parameter("vad_drain_ms", 600)
         self.declare_parameter("vad_speech_start_frames", 6)

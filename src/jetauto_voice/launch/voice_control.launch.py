@@ -75,8 +75,8 @@ def generate_launch_description():
     )
     mic_device_index_arg = DeclareLaunchArgument(
         'mic_device_index',
-        default_value='-1',
-        description='ALSA mic device index (-1 = system default)',
+        default_value='1',
+        description='ALSA mic device index. 1=XFM-DP (JetAuto built-in mic), 2=USB Audio, -1=system default',
     )
     vad_aggressiveness_arg = DeclareLaunchArgument(
         'vad_aggressiveness',
