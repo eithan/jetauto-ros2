@@ -16,3 +16,6 @@ detector_node:
     # --- Output ---
     publish_annotated_image: true      # publish image with bounding boxes
     annotated_image_topic: "/detected_objects/image"
+
+    # --- Enable ---
+    start_enabled: false               # stay idle until "start vision" voice command

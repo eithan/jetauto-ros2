@@ -38,7 +38,7 @@ class DetectorNode(LifecycleNode):
         self.declare_parameter('max_detections', 10)
         self.declare_parameter('publish_annotated_image', True)
         self.declare_parameter('annotated_image_topic', '/detected_objects/image')
-        self.declare_parameter('start_enabled', True)
+        self.declare_parameter('start_enabled', False)
 
         # -- Internal state --
         self.model = None

@@ -16,7 +16,7 @@ import time
 
 import rclpy
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 from jetauto_msgs.msg import DetectedObjectArray
 
@@ -48,6 +48,7 @@ class TTSNode(LifecycleNode):
         self._speech_queue = queue.Queue(maxsize=10)
         self._speaker_thread = None
         self._shutdown_event = threading.Event()
+        self._speaking_pub = None        # set in on_activate
 
         self.get_logger().info('TTSNode created (inactive — waiting for configure)')
 
@@ -83,6 +84,8 @@ class TTSNode(LifecycleNode):
         self.sub_manual = self.create_subscription(
             String, '/tts/speak', self._manual_speak_callback, 10
         )
+        # Publish speaking state so the voice commander can mute the mic
+        self._speaking_pub = self.create_publisher(Bool, '/tts/speaking', 1)
         self.get_logger().info('Activated — listening for detections')
         return super().on_activate(state)
 
@@ -164,10 +167,14 @@ class TTSNode(LifecycleNode):
                 continue
 
             try:
+                self._publish_speaking(True)
                 self.tts_engine.say(text)
                 self.tts_engine.runAndWait()
+                time.sleep(0.3)   # brief tail buffer so mic doesn't catch reverb
             except Exception as e:
                 self.get_logger().error(f'TTS speak error: {e}')
+            finally:
+                self._publish_speaking(False)
 
     def _stop_speaker(self):
         """Signal the speaker thread to stop and wait for it."""
@@ -175,6 +182,13 @@ class TTSNode(LifecycleNode):
         if self._speaker_thread is not None and self._speaker_thread.is_alive():
             self._speaker_thread.join(timeout=3.0)
         self.tts_engine = None
+
+    def _publish_speaking(self, speaking: bool) -> None:
+        """Publish /tts/speaking so voice commander can mute the mic."""
+        if self._speaking_pub is not None:
+            msg = Bool()
+            msg.data = speaking
+            self._speaking_pub.publish(msg)
 
     def _enqueue_speech(self, text: str):
         """Add text to the speech queue (non-blocking, drops if full)."""

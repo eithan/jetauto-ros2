@@ -165,6 +165,10 @@ class VoiceCommanderNode(Node):
         self._wake_word_detector = None
         self._stt_model = None
         self._stt_actual_device = self._stt_device  # may change after fallback
+        self._tts_speaking = False       # True while TTS node is playing audio
+
+        # Subscribe to TTS speaking state so we can mute the mic
+        self.create_subscription(Bool, '/tts/speaking', self._on_tts_speaking, 1)
 
         # -- Load models --
         self._init_wakeword()
@@ -473,6 +477,13 @@ class VoiceCommanderNode(Node):
             audio_data, _ = stream.read(int(self._sample_rate * 5.0))
             return audio_data.flatten().astype(np.float32) / 32768.0
 
+        # If TTS is still speaking (race condition), drain mic until it stops
+        tts_wait_start = time.time()
+        while self._tts_speaking and not self._shutdown_event.is_set():
+            if time.time() - tts_wait_start > 15.0:
+                break
+            stream.read(VAD_FRAME_SAMPLES)
+
         # Drain buffer: clears wake word tail / TTS echo before VAD starts
         drain_samples = int(self._vad_drain_ms * self._sample_rate / 1000)
         stream.read(drain_samples)
@@ -641,19 +652,42 @@ class VoiceCommanderNode(Node):
     # Publishers
     # ------------------------------------------------------------------ #
 
-    def _speak_blocking(self, text: str) -> None:
-        """Publish TTS and block until estimated speech duration has elapsed.
+    def _on_tts_speaking(self, msg: Bool) -> None:
+        """Track whether the TTS node is currently playing audio."""
+        self._tts_speaking = msg.data
 
-        Prevents VAD from opening the mic while the robot is still talking.
-        Estimate: ~2.5 words/sec + 0.4s buffer.
+    def _speak_blocking(self, text: str) -> None:
+        """Publish TTS and block until the TTS node signals it has finished.
+
+        Waits up to 1 s for the TTS node to start (handles ROS dispatch
+        latency + pyttsx3 queue pickup), then waits for it to finish.
+        Falls back to a time-estimate if /tts/speaking never fires
+        (e.g. TTS node not running).
 
         Args:
             text: Text to speak.
         """
         self._publish_tts(text)
-        words = len(text.split())
-        estimated_sec = max(0.8, words / 2.5 + 0.4)
-        time.sleep(estimated_sec)
+
+        # Wait for TTS to START (up to 1.5 s for ROS dispatch + queue)
+        start_deadline = time.time() + 1.5
+        while not self._tts_speaking and time.time() < start_deadline:
+            if self._shutdown_event.is_set():
+                return
+            time.sleep(0.05)
+
+        if self._tts_speaking:
+            # Wait for TTS to FINISH (up to 20 s safety cap)
+            end_deadline = time.time() + 20.0
+            while self._tts_speaking and time.time() < end_deadline:
+                if self._shutdown_event.is_set():
+                    return
+                time.sleep(0.05)
+        else:
+            # /tts/speaking never fired — fall back to time estimate
+            words = len(text.split())
+            estimated_sec = max(0.8, words / 2.5 + 0.5)
+            time.sleep(estimated_sec)
 
     def _publish_detection_enable(self, enabled: bool) -> None:
         """Publish to /jetauto/detection/enable."""
