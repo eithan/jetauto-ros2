@@ -60,7 +60,7 @@ def generate_launch_description():
     )
     stt_model_size_arg = DeclareLaunchArgument(
         'stt_model_size',
-        default_value='base.en',
+        default_value='tiny.en',
         description='faster-whisper model size: tiny.en, base.en, small.en, medium, large-v2 (.en = English-only, more accurate)',
     )
     stt_device_arg = DeclareLaunchArgument(

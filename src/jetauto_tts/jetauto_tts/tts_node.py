@@ -170,7 +170,7 @@ class TTSNode(LifecycleNode):
                 self._publish_speaking(True)
                 self.tts_engine.say(text)
                 self.tts_engine.runAndWait()
-                time.sleep(0.3)   # brief tail buffer so mic doesn't catch reverb
+                time.sleep(0.8)   # room reverb buffer — mic drains while this runs
             except Exception as e:
                 self.get_logger().error(f'TTS speak error: {e}')
             finally:

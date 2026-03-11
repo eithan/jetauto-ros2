@@ -120,7 +120,7 @@ class VoiceCommanderNode(Node):
         # -- Declare parameters --
         self.declare_parameter("wake_word_model", "hey_jarvis")
         self.declare_parameter("wake_word_threshold", 0.65)
-        self.declare_parameter("stt_model_size", "base.en")
+        self.declare_parameter("stt_model_size", "tiny.en")
         self.declare_parameter("stt_device", "cuda")
         self.declare_parameter("stt_compute_type", "float16")
         self.declare_parameter("mic_device_index", -1)
@@ -386,11 +386,11 @@ class VoiceCommanderNode(Node):
         max_noise_retries = 3
 
         while not self._shutdown_event.is_set():
+            # Always drain before VAD — first listen needs it too (clears greeting echo)
+            self._drain_mic(stream, drain_ms)
             if not first_listen:
-                # Drain mic to clear TTS echo before beep + VAD
-                self._drain_mic(stream, drain_ms)
                 self._play_beep()
-                self.get_logger().info("SPEAK NOW")
+            self.get_logger().info("SPEAK NOW")
 
             first_listen = False
 
@@ -586,7 +586,7 @@ class VoiceCommanderNode(Node):
             segments, _info = self._stt_model.transcribe(
                 audio,
                 language="en",
-                beam_size=5,
+                beam_size=1,   # greedy — 4-5x faster, fine for short commands
                 vad_filter=True,
             )
             return " ".join(seg.text for seg in segments).strip()
