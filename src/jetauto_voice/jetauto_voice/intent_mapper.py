@@ -252,7 +252,16 @@ def extract_target(text: str) -> Optional[tuple[str, str]]:
     # Strip polite/filler prefixes ("please find..." → "find...")
     text = _PREFIX_RE.sub("", text).strip()
 
+    # Try the full text first, then fall back to each sentence.
+    # Handles Whisper fragments like "person. Find the person." where the
+    # first clause is junk but a later sentence contains the real command.
     raw_object = _match_intent(text)
+    if raw_object is None:
+        for sentence in re.split(r'[.!?]\s+', text):
+            sentence = _PREFIX_RE.sub("", sentence.strip()).strip()
+            raw_object = _match_intent(sentence)
+            if raw_object is not None:
+                break
     if raw_object is None:
         return None
 

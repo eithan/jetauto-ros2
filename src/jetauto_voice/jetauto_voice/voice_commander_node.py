@@ -470,11 +470,14 @@ class VoiceCommanderNode(Node):
             self._dispatch_intent(text)
 
     def _drain_mic(self, stream, ms: int) -> None:
-        """Read and discard mic audio for exactly `ms` wall-clock milliseconds.
+        """Read and discard mic audio for exactly `ms` wall-clock milliseconds,
+        then flush any remaining frames still queued in the stream's ring buffer.
 
-        Uses wall-clock time (not sample count) to guarantee the full duration
-        is waited even when the stream's internal buffer is pre-filled with
-        stale audio from while we were blocked in TTS.
+        Two-phase drain:
+        1. Wall-clock loop — ensures we wait the full real-time duration even
+           when the ring buffer is pre-filled with stale TTS audio.
+        2. Buffer flush — empties any frames that accumulated during the wait,
+           so VAD doesn't immediately see old audio on the next read.
 
         Args:
             stream: Open sounddevice InputStream.
@@ -483,9 +486,16 @@ class VoiceCommanderNode(Node):
         deadline = time.time() + ms / 1000.0
         while time.time() < deadline and not self._shutdown_event.is_set():
             try:
-                stream.read(_OWW_CHUNK_SAMPLES)  # 80ms chunks, matches stream blocksize
+                stream.read(_OWW_CHUNK_SAMPLES)
             except Exception:
                 time.sleep(0.01)
+
+        # Flush any remaining buffered frames so VAD starts on fresh audio
+        try:
+            while stream.read_available >= _OWW_CHUNK_SAMPLES:
+                stream.read(_OWW_CHUNK_SAMPLES)
+        except Exception:
+            pass
 
     def _capture_vad(self, stream) -> Optional[np.ndarray]:
         """Capture speech using WebRTC VAD with automatic start/end detection.
