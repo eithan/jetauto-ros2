@@ -415,10 +415,15 @@ class VoiceCommanderNode(Node):
         drain_ms = self._vad_drain_ms + 200  # extra buffer for TTS reverb
         noise_retries = 0
         max_noise_retries = 3
-        failed_attempts = 0       # empty transcript / hallucination counter
-        max_failed_attempts = 4   # give up after this many consecutive failures
+        session_start = time.time()
+        session_timeout_sec = 300.0  # 5-minute session limit
 
         while not self._shutdown_event.is_set():
+            # 5-minute session timeout
+            if time.time() - session_start > session_timeout_sec:
+                self.get_logger().info("Session timeout (5 min) — returning to wake word")
+                break
+
             # Always drain then beep — gives user a clear "start speaking" cue
             self._drain_mic(stream, drain_ms)
             self._play_beep()
@@ -451,24 +456,13 @@ class VoiceCommanderNode(Node):
 
             text = self._transcribe(audio_float)
             if not text:
-                failed_attempts += 1
-                self.get_logger().info(f"Empty transcript — retrying ({failed_attempts}/{max_failed_attempts})")
-                if failed_attempts >= max_failed_attempts:
-                    self.get_logger().info("Too many failed attempts — returning to wake word")
-                    break
+                self.get_logger().info("Empty transcript — retrying")
                 continue
 
-            # Filter Whisper hallucinations
+            # Filter Whisper hallucinations — retry silently
             if text.lower().rstrip("?.!,") in _HALLUCINATIONS:
-                failed_attempts += 1
-                self.get_logger().info(f'Hallucination filtered: "{text}" ({failed_attempts}/{max_failed_attempts})')
-                if failed_attempts >= max_failed_attempts:
-                    self.get_logger().info("Too many failed attempts — returning to wake word")
-                    break
+                self.get_logger().info(f'Hallucination filtered: "{text}" — retrying')
                 continue
-
-            # Successful transcription — reset failure counter
-            failed_attempts = 0
 
             self.get_logger().info(f'Transcribed: "{text}"')
 
@@ -659,23 +653,23 @@ class VoiceCommanderNode(Node):
     # Intent dispatch
     # ------------------------------------------------------------------ #
 
-    # Exact phrases that end the listening session.
-    # Checked via full-text match only — NOT substring — so "cancel vision",
-    # "stop detection", "stop finding" etc. are NOT caught here.
-    _STOP_PHRASES: frozenset = frozenset({
-        "stop", "cancel", "quit", "exit", "done", "bye", "goodbye",
-        "stop it", "stop now", "cancel it", "cancel that", "ok stop",
-        "okay stop", "never mind", "nevermind", "that's all", "thats all",
-        "that is all", "i'm done", "im done", "i am done",
-    })
-
     def _is_stop_command(self, text: str) -> bool:
-        """Return True if the user wants to stop the listening session.
+        """Return True if the user said 'Jarvis stop' to end the session.
 
-        Uses exact full-text match only — avoids matching "cancel vision" or
-        "stop detection" which are disable commands, not session-end commands.
+        Only explicit Jarvis-addressed stop commands end the session — avoids
+        accidentally stopping on "stop detection", "cancel vision", etc.
         """
-        return text.lower().strip().rstrip("?.!,") in self._STOP_PHRASES
+        t = text.lower().strip().rstrip("?.!,")
+        return any(phrase in t for phrase in [
+            "jarvis stop",
+            "stop jarvis",
+            "hey jarvis stop",
+            "jarvis quit",
+            "jarvis exit",
+            "jarvis done",
+            "jarvis goodbye",
+            "jarvis bye",
+        ])
 
     def _dispatch_intent(self, text: str) -> None:
         """Route a transcript to the appropriate action.
