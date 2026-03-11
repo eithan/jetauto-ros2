@@ -133,7 +133,8 @@ def generate_launch_description():
         condition=IfCondition(use_iflytek),
     )
 
-    # -- Vision detector node (lifecycle) — handles /jetauto/detection/enable + /target --
+    # -- Vision detector node (lifecycle) —  handles /jetauto/detection/enable + /target --
+    # Starts alongside voice so "start vision" / "find X" commands actually reach it.
     vision_config = os.path.join(
         get_package_share_directory('jetauto_vision'),
         'config',
@@ -198,45 +199,6 @@ def generate_launch_description():
                 launch.actions.EmitEvent(
                     event=ChangeState(
                         lifecycle_node_matcher=launch.events.matches_action(tts),
-                        transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
-                    )
-                ),
-            ],
-        )
-    )
-
-    # -- Detector node (lifecycle) — YOLO object detection --
-    # Started alongside voice so that "start vision" / "find X" commands work.
-    # Voice commander publishes to /jetauto/detection/enable and
-    # /jetauto/detection/target which this node subscribes to.
-    vision_config = os.path.join(
-        get_package_share_directory('jetauto_vision'),
-        'config',
-        'vision_params.yaml',
-    )
-    detector = LifecycleNode(
-        package='jetauto_vision',
-        executable='detector_node',
-        name='detector_node',
-        namespace='',
-        parameters=[vision_config],
-        output='screen',
-        emulate_tty=True,
-    )
-    detector_configure = launch.actions.EmitEvent(
-        event=ChangeState(
-            lifecycle_node_matcher=launch.events.matches_action(detector),
-            transition_id=lifecycle_msgs.msg.Transition.TRANSITION_CONFIGURE,
-        )
-    )
-    detector_activate = launch.actions.RegisterEventHandler(
-        OnStateTransition(
-            target_lifecycle_node=detector,
-            goal_state='inactive',
-            entities=[
-                launch.actions.EmitEvent(
-                    event=ChangeState(
-                        lifecycle_node_matcher=launch.events.matches_action(detector),
                         transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
                     )
                 ),
