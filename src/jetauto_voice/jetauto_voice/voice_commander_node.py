@@ -528,8 +528,14 @@ class VoiceCommanderNode(Node):
                 break
             stream.read(VAD_FRAME_SAMPLES)
 
-        # No additional drain here — caller (_handle_wake_word) already did a
-        # wall-clock drain before logging SPEAK NOW, so VAD opens immediately.
+        # Fixed mini-drain: 5 frames × 20ms = 100ms.
+        # Clears any residual audio still in the stream's ring buffer after
+        # the wall-clock drain — read_available is unreliable on blocking streams.
+        for _ in range(5):
+            try:
+                stream.read(VAD_FRAME_SAMPLES)
+            except Exception:
+                break
 
         timeout_frames = int(self._vad_listen_timeout_sec * 1000 / VAD_FRAME_MS)
         max_frames = int(self._vad_max_duration_sec * 1000 / VAD_FRAME_MS)

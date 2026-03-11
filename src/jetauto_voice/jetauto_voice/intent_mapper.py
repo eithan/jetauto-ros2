@@ -262,6 +262,15 @@ def extract_target(text: str) -> Optional[tuple[str, str]]:
             raw_object = _match_intent(sentence)
             if raw_object is not None:
                 break
+
+    # Last resort: bare noun ("the person", "phone", "chair").
+    # Handles conversational shorthand after the wake word greeting.
+    # Only accepted if the text maps to a known YOLO class.
+    if raw_object is None:
+        bare = re.sub(r'^(?:a|an|the|my|some)\s+', '', text.lower().strip().rstrip('?.!,'))
+        if bare and map_to_yolo_class(bare) is not None:
+            raw_object = bare
+
     if raw_object is None:
         return None
 
