@@ -2,88 +2,32 @@
 """
 Voice Commander Node — fully offline, open-source voice pipeline.
 
-Replaces the iFlyTek/asr_node dependency with:
-  1. openWakeWord  — always-on wake word detection (low CPU, background thread)
-  2. faster-whisper — CUDA-accelerated STT (falls back to CPU on Orin Nano)
-  3. intent_mapper  — regex-based intent parsing + YOLO class mapping
-
 Flow::
 
     mic audio  →  openWakeWord (continuous, 80ms chunks)
                       │ wake word detected
                       ▼
-               VAD endpoint detection
-               (capture until silence)
+               greeting TTS → beep → continuous listen session
                       │
-                      ▼
-               faster-whisper → transcript text
-                      │
-                      ▼
-               intent_mapper.extract_target()
-                      │
-              ┌───────┴────────────────────────┐
-              │ find X intent                  │ enable/disable
-              ▼                                ▼
-    publish /jetauto/detection/enable (True)  publish /jetauto/detection/enable
-    publish /jetauto/detection/target (label)
-    publish /tts/speak ("Looking for X...")
+              ┌───────┴───── VAD captures utterance ─────┐
+              │              faster-whisper STT           │
+              │              intent_mapper                │
+              │                                           │
+              │  find X / start vision → execute, END     │
+              │  stop/disable vision   → execute, LISTEN  │
+              │  Jarvis stop           → END              │
+              │  unmatched / noise     → LISTEN           │
+              └───────────────────────────────────────────┘
 
-ROS2 Parameters
----------------
-wake_word_model : str
-    openWakeWord model name. Built-in options include ``'hey_jarvis'``,
-    ``'alexa'``, ``'hey_mycroft'``. Default: ``'hey_jarvis'``.
-wake_word_threshold : float
-    Detection confidence threshold in [0.0, 1.0]. Lower values are more
-    sensitive (more false positives). Default: ``0.5``.
-stt_model_size : str
-    faster-whisper model size: ``'tiny'``, ``'base'``, ``'small'``,
-    ``'medium'``, ``'large-v2'``. Larger = more accurate, slower.
-    Default: ``'base'``.
-stt_device : str
-    Inference device: ``'cuda'`` or ``'cpu'``. Falls back to CPU
-    automatically if CUDA is unavailable. Default: ``'cuda'``.
-stt_compute_type : str
-    faster-whisper compute type: ``'float16'``, ``'int8'``, ``'float32'``.
-    ``'float16'`` requires CUDA; CPU falls back to ``'int8'``.
-    Default: ``'float16'``.
-mic_device_index : int
-    ALSA device index for sounddevice. ``-1`` uses the system default.
-    Default: ``-1``.
-vad_energy_threshold : int
-    RMS energy level (0–32768) above which a chunk is considered speech.
-    Tune up if noisy environment causes false triggers; tune down if mic
-    is very quiet. Default: ``300``.
-vad_silence_ms : int
-    Milliseconds of silence after speech that triggers end-of-utterance.
-    Default: ``700`` (700ms).
-vad_max_duration_sec : float
-    Maximum seconds to wait for an utterance before giving up.
-    Default: ``8.0``.
-wake_cooldown_sec : float
-    Seconds to ignore wake word detections after handling one, preventing
-    immediate re-triggering on residual OWW scores. Default: ``2.0``.
-sample_rate : int
-    Microphone sample rate in Hz. Must match openWakeWord's expected rate
-    of 16000 Hz. Default: ``16000``.
-
-Topics Published
-----------------
-/jetauto/detection/enable : std_msgs/Bool
-    ``True`` to enable YOLO detection, ``False`` to disable.
-/jetauto/detection/target : std_msgs/String
-    Canonical YOLO COCO class label to search for (e.g. ``'bottle'``).
-/tts/speak : std_msgs/String
-    Human-readable TTS response text.
+"END" = return to passive wake word listening.
+"LISTEN" = keep the session open and capture next utterance.
 """
 
 import os
-import queue
 import time
 import threading
 from typing import Optional
 
-# Force HuggingFace to use local cache only — no network calls after first download
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
@@ -98,167 +42,134 @@ from jetauto_voice.intent_mapper import (
     extract_target,
     is_enable_command,
     is_disable_command,
+    _HALLUCINATIONS,
 )
 
-# openWakeWord expects 80 ms frames at 16 kHz = 1280 samples
-_OWW_CHUNK_SAMPLES = 1280
+_OWW_CHUNK_SAMPLES = 1280   # 80 ms @ 16 kHz
 _OWW_SAMPLE_RATE = 16000
+
+# ---------------------------------------------------------------------------
+# Timing constants (seconds)
+# ---------------------------------------------------------------------------
+_TTS_WPS = 2.5          # pyttsx3 approximate words-per-second
+_TTS_OVERHEAD = 1.2     # pyttsx3 startup + buffer + reverb decay
 
 
 class VoiceCommanderNode(Node):
-    """Offline voice commander using openWakeWord and faster-whisper.
-
-    This node runs a background audio listener thread that continuously
-    feeds audio chunks to openWakeWord. When the wake word is detected,
-    it captures a full utterance, runs faster-whisper STT, parses the
-    transcript for intent, and publishes to the appropriate ROS2 topics.
-    """
 
     def __init__(self) -> None:
         super().__init__("voice_commander_node")
 
-        # -- Declare parameters --
+        # -- Parameters --
         self.declare_parameter("wake_word_model", "hey_jarvis")
         self.declare_parameter("wake_word_threshold", 0.5)
-        self.declare_parameter("stt_model_size", "tiny.en")
+        self.declare_parameter("stt_model_size", "base.en")
         self.declare_parameter("stt_device", "cuda")
         self.declare_parameter("stt_compute_type", "float16")
-        self.declare_parameter("mic_device_index", 1)  # XFM-DP-V0.0.18 — JetAuto built-in mic
-        self.declare_parameter("vad_aggressiveness", 1)
-        self.declare_parameter("vad_drain_ms", 600)
-        self.declare_parameter("vad_speech_start_frames", 6)
+        self.declare_parameter("mic_device_index", 1)
+        self.declare_parameter("vad_aggressiveness", 2)
+        self.declare_parameter("vad_speech_start_frames", 8)
         self.declare_parameter("vad_speech_end_frames", 30)
-        self.declare_parameter("vad_min_speech_ms", 200)
-        self.declare_parameter("vad_listen_timeout_sec", 10.0)
+        self.declare_parameter("vad_min_speech_ms", 250)
+        self.declare_parameter("vad_listen_timeout_sec", 30.0)
         self.declare_parameter("vad_max_duration_sec", 10.0)
         self.declare_parameter("wake_cooldown_sec", 5.0)
         self.declare_parameter("sample_rate", 16000)
+        self.declare_parameter("session_timeout_sec", 300.0)
 
-        # -- Read parameters --
-        self._wake_word_model: str = self.get_parameter("wake_word_model").value
-        self._wake_word_threshold: float = self.get_parameter("wake_word_threshold").value
-        self._stt_model_size: str = self.get_parameter("stt_model_size").value
-        self._stt_device: str = self.get_parameter("stt_device").value
-        self._stt_compute_type: str = self.get_parameter("stt_compute_type").value
-        self._mic_device_index: int = self.get_parameter("mic_device_index").value
-        self._vad_aggressiveness: int = self.get_parameter("vad_aggressiveness").value
-        self._vad_drain_ms: int = self.get_parameter("vad_drain_ms").value
-        self._vad_speech_start_frames: int = self.get_parameter("vad_speech_start_frames").value
-        self._vad_speech_end_frames: int = self.get_parameter("vad_speech_end_frames").value
-        self._vad_min_speech_ms: int = self.get_parameter("vad_min_speech_ms").value
-        self._vad_listen_timeout_sec: float = self.get_parameter("vad_listen_timeout_sec").value
-        self._vad_max_duration_sec: float = self.get_parameter("vad_max_duration_sec").value
-        self._wake_cooldown_sec: float = self.get_parameter("wake_cooldown_sec").value
-        self._sample_rate: int = self.get_parameter("sample_rate").value
+        # -- Read all parameters --
+        p = self.get_parameter
+        self._wake_word_model: str = p("wake_word_model").value
+        self._wake_word_threshold: float = p("wake_word_threshold").value
+        self._stt_model_size: str = p("stt_model_size").value
+        self._stt_device: str = p("stt_device").value
+        self._stt_compute_type: str = p("stt_compute_type").value
+        self._mic_device_index: int = p("mic_device_index").value
+        self._vad_aggressiveness: int = p("vad_aggressiveness").value
+        self._vad_speech_start_frames: int = p("vad_speech_start_frames").value
+        self._vad_speech_end_frames: int = p("vad_speech_end_frames").value
+        self._vad_min_speech_ms: int = p("vad_min_speech_ms").value
+        self._vad_listen_timeout_sec: float = p("vad_listen_timeout_sec").value
+        self._vad_max_duration_sec: float = p("vad_max_duration_sec").value
+        self._wake_cooldown_sec: float = p("wake_cooldown_sec").value
+        self._sample_rate: int = p("sample_rate").value
+        self._session_timeout_sec: float = p("session_timeout_sec").value
 
         # -- Publishers --
-        self._detection_pub = self.create_publisher(
-            Bool, "/jetauto/detection/enable", 1
-        )
-        self._target_pub = self.create_publisher(
-            String, "/jetauto/detection/target", 1
-        )
+        self._detection_pub = self.create_publisher(Bool, "/jetauto/detection/enable", 1)
+        self._target_pub = self.create_publisher(String, "/jetauto/detection/target", 1)
         self._tts_pub = self.create_publisher(String, "/tts/speak", 1)
 
-        # -- Internal state --
+        # -- State --
         self._shutdown_event = threading.Event()
         self._wake_word_detector = None
         self._stt_model = None
-        self._stt_actual_device = self._stt_device  # may change after fallback
-        self._tts_speaking = False       # True while TTS node is playing audio
-
-        # Subscribe to TTS speaking state so we can mute the mic
-        self.create_subscription(Bool, '/tts/speaking', self._on_tts_speaking, 1)
+        self._stt_actual_device = self._stt_device
 
         # -- Load models --
         self._init_wakeword()
         self._init_stt()
 
-        # -- Start background audio thread --
+        # -- Background audio thread --
         self._listener_thread = threading.Thread(
-            target=self._audio_loop,
-            daemon=True,
-            name="voice_listener",
+            target=self._audio_loop, daemon=True, name="voice_listener",
         )
         self._listener_thread.start()
 
         self.get_logger().info(
-            f"VoiceCommanderNode ready — wake_word='{self._wake_word_model}' "
-            f"(threshold={self._wake_word_threshold}), "
+            f"VoiceCommanderNode ready — wake='{self._wake_word_model}' "
+            f"(thr={self._wake_word_threshold}), "
             f"STT={self._stt_model_size}@{self._stt_actual_device}"
         )
 
-    # ------------------------------------------------------------------ #
-    # Model initialization
-    # ------------------------------------------------------------------ #
+    # ================================================================== #
+    # Model init
+    # ================================================================== #
 
     def _init_wakeword(self) -> None:
-        """Load the openWakeWord model from local cache, downloading only if absent."""
         try:
-            import openwakeword  # type: ignore[import]
-            from openwakeword.model import Model  # type: ignore[import]
+            import openwakeword
+            from openwakeword.model import Model
         except ImportError:
-            self.get_logger().error(
-                "openwakeword not installed! Run: pip3 install openwakeword"
-            )
+            self.get_logger().error("openwakeword not installed!")
             return
 
-        # Resolve local model path — avoids any network call when model is cached
-        oww_model_dir = os.path.join(
+        oww_dir = os.path.join(
             os.path.dirname(openwakeword.__file__), "resources", "models"
         )
-        # openWakeWord stores models as <name>_v0.1.onnx
-        local_path = os.path.join(oww_model_dir, f"{self._wake_word_model}_v0.1.onnx")
+        local = os.path.join(oww_dir, f"{self._wake_word_model}_v0.1.onnx")
 
-        if os.path.exists(local_path):
-            model_source = local_path
-            self.get_logger().info(
-                f"Loading openWakeWord model from local cache: {local_path}"
-            )
+        if os.path.exists(local):
+            source = local
         else:
-            # First run only — download from HuggingFace then load by name
-            self.get_logger().info(
-                f"openWakeWord model not found locally — downloading '{self._wake_word_model}'..."
-            )
+            self.get_logger().info(f"Downloading OWW model '{self._wake_word_model}'…")
             try:
-                # Temporarily unset offline mode for download
                 os.environ.pop("HF_HUB_OFFLINE", None)
                 os.environ.pop("TRANSFORMERS_OFFLINE", None)
-                from openwakeword.utils import download_models  # type: ignore[import]
+                from openwakeword.utils import download_models
                 download_models([self._wake_word_model])
                 os.environ["HF_HUB_OFFLINE"] = "1"
                 os.environ["TRANSFORMERS_OFFLINE"] = "1"
-            except Exception as exc:
-                self.get_logger().warn(f"Model download failed: {exc}")
-            model_source = self._wake_word_model
+            except Exception as e:
+                self.get_logger().warn(f"OWW download failed: {e}")
+            source = self._wake_word_model
 
         try:
             self._wake_word_detector = Model(
-                wakeword_models=[model_source],
-                inference_framework="onnx",
+                wakeword_models=[source], inference_framework="onnx",
             )
-            self.get_logger().info(
-                f"openWakeWord loaded: '{self._wake_word_model}'"
-            )
-        except Exception as exc:
-            self.get_logger().error(f"openWakeWord init failed: {exc}")
+            self.get_logger().info(f"openWakeWord loaded: '{self._wake_word_model}'")
+        except Exception as e:
+            self.get_logger().error(f"openWakeWord init failed: {e}")
 
     def _init_stt(self) -> None:
-        """Load the faster-whisper STT model, with automatic CPU fallback.
-
-        Temporarily lifts HF_HUB_OFFLINE so the model can be downloaded on
-        first use, then restores offline mode once it's cached locally.
-        """
         try:
-            from faster_whisper import WhisperModel  # type: ignore[import]
+            from faster_whisper import WhisperModel
         except ImportError:
-            self.get_logger().error(
-                "faster-whisper not installed! Run: pip3 install faster-whisper"
-            )
+            self.get_logger().error("faster-whisper not installed!")
             return
 
-        # Allow network for first-time model download
-        saved_offline = os.environ.pop("HF_HUB_OFFLINE", None)
+        saved = os.environ.pop("HF_HUB_OFFLINE", None)
         os.environ.pop("TRANSFORMERS_OFFLINE", None)
 
         try:
@@ -268,203 +179,224 @@ class VoiceCommanderNode(Node):
                 compute_type=self._stt_compute_type,
             )
             self.get_logger().info(
-                f"faster-whisper loaded: size={self._stt_model_size}, "
-                f"device={self._stt_device}, compute={self._stt_compute_type}"
+                f"faster-whisper: {self._stt_model_size} "
+                f"on {self._stt_device}/{self._stt_compute_type}"
             )
-        except Exception as exc:
-            self.get_logger().warn(
-                f"faster-whisper on {self._stt_device} failed ({exc}) — "
-                "trying CPU/int8 fallback"
-            )
-            self._init_stt_cpu_fallback()
+        except Exception as e:
+            self.get_logger().warn(f"STT on {self._stt_device} failed ({e}) — trying CPU")
+            try:
+                self._stt_model = WhisperModel(
+                    self._stt_model_size, device="cpu", compute_type="int8",
+                )
+                self._stt_actual_device = "cpu"
+                self.get_logger().info(f"faster-whisper CPU fallback: {self._stt_model_size}/int8")
+            except Exception as e2:
+                self.get_logger().error(f"STT CPU fallback failed: {e2}")
         finally:
-            # Restore offline mode — model is cached now
-            if saved_offline is not None:
-                os.environ["HF_HUB_OFFLINE"] = saved_offline
+            if saved is not None:
+                os.environ["HF_HUB_OFFLINE"] = saved
             os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
-    def _init_stt_cpu_fallback(self) -> None:
-        """Fallback: load faster-whisper on CPU with int8 quantization."""
-        try:
-            from faster_whisper import WhisperModel  # type: ignore[import]
-
-            self._stt_model = WhisperModel(
-                self._stt_model_size,
-                device="cpu",
-                compute_type="int8",
-            )
-            self._stt_actual_device = "cpu"
-            self.get_logger().info(
-                f"faster-whisper CPU fallback: size={self._stt_model_size}, int8"
-            )
-        except Exception as exc:
-            self.get_logger().error(f"faster-whisper CPU fallback failed: {exc}")
-
-    # ------------------------------------------------------------------ #
-    # Background audio loop
-    # ------------------------------------------------------------------ #
+    # ================================================================== #
+    # Audio loop — wake word detection
+    # ================================================================== #
 
     def _audio_loop(self) -> None:
-        """Continuously read mic audio and run wake word detection.
-
-        Runs on a background daemon thread. When openWakeWord detects the
-        wake word above the configured threshold, calls ``_handle_wake_word``
-        to capture and transcribe a full utterance.
-
-        A cooldown period after each detection prevents OWW's residual
-        buffered scores from immediately re-triggering.
-
-        Exits cleanly when ``_shutdown_event`` is set.
-        """
         try:
-            import sounddevice as sd  # type: ignore[import]
+            import sounddevice as sd
         except ImportError:
-            self.get_logger().error(
-                "sounddevice not installed! Run: pip3 install sounddevice"
-            )
+            self.get_logger().error("sounddevice not installed!")
             return
 
         if self._wake_word_detector is None:
-            self.get_logger().error(
-                "Wake word detector not loaded — audio loop aborted"
-            )
+            self.get_logger().error("OWW not loaded — aborting audio loop")
             return
 
-        device: Optional[int] = (
-            self._mic_device_index if self._mic_device_index >= 0 else None
-        )
-
-        # How many OWW chunks to skip after a detection (prevents re-triggering)
+        device = self._mic_device_index if self._mic_device_index >= 0 else None
         cooldown_total = int(
             self._wake_cooldown_sec * self._sample_rate / _OWW_CHUNK_SAMPLES
         )
 
         self.get_logger().info(
-            f"Audio loop started — rate={self._sample_rate}Hz, "
-            f"chunk={_OWW_CHUNK_SAMPLES} samples, device={device}"
+            f"Audio loop started — {self._sample_rate}Hz, device={device}"
         )
 
         with sd.InputStream(
-            samplerate=self._sample_rate,
-            channels=1,
-            dtype="int16",
-            blocksize=_OWW_CHUNK_SAMPLES,
-            device=device,
+            samplerate=self._sample_rate, channels=1, dtype="int16",
+            blocksize=_OWW_CHUNK_SAMPLES, device=device,
         ) as stream:
-            cooldown_remaining = 0
-            # Periodic score logging — log peak OWW score every ~5s so we can
-            # see whether the mic is working and what scores "Hey Jarvis" gets.
-            _debug_log_interval = int(5.0 * self._sample_rate / _OWW_CHUNK_SAMPLES)
-            _debug_chunk_count = 0
-            _debug_peak_score = 0.0
+            cooldown = 0
+            dbg_interval = int(5.0 * self._sample_rate / _OWW_CHUNK_SAMPLES)
+            dbg_count = 0
+            dbg_peak = 0.0
 
             while not self._shutdown_event.is_set():
-                audio_chunk, _ = stream.read(_OWW_CHUNK_SAMPLES)
-                audio_flat = audio_chunk.flatten()
+                chunk, _ = stream.read(_OWW_CHUNK_SAMPLES)
+                flat = chunk.flatten()
 
-                # Skip OWW evaluation during cooldown; still drain the stream
-                if cooldown_remaining > 0:
-                    cooldown_remaining -= 1
-                    if self._wake_word_detector is not None:
-                        self._wake_word_detector.predict(audio_flat)
+                if cooldown > 0:
+                    cooldown -= 1
+                    self._wake_word_detector.predict(flat)
                     continue
 
-                # openWakeWord expects int16 samples
-                prediction: dict = self._wake_word_detector.predict(audio_flat)
+                pred = self._wake_word_detector.predict(flat)
+                score = max(pred.values()) if pred else 0.0
 
-                # Pick the maximum score across all loaded models
-                score: float = max(prediction.values()) if prediction else 0.0
-
-                # Track peak for periodic debug log
-                if score > _debug_peak_score:
-                    _debug_peak_score = score
-                _debug_chunk_count += 1
-                if _debug_chunk_count >= _debug_log_interval:
+                if score > dbg_peak:
+                    dbg_peak = score
+                dbg_count += 1
+                if dbg_count >= dbg_interval:
                     self.get_logger().info(
-                        f"[OWW] peak score last 5s: {_debug_peak_score:.3f} "
-                        f"(threshold={self._wake_word_threshold})"
+                        f"[OWW] peak={dbg_peak:.3f} thr={self._wake_word_threshold}"
                     )
-                    _debug_chunk_count = 0
-                    _debug_peak_score = 0.0
+                    dbg_count = 0
+                    dbg_peak = 0.0
 
                 if score >= self._wake_word_threshold:
-                    self.get_logger().info(
-                        f"Wake word detected (score={score:.3f})"
-                    )
-                    self._handle_wake_word(stream)
-                    cooldown_remaining = cooldown_total
-                    _debug_chunk_count = 0
-                    _debug_peak_score = 0.0
+                    self.get_logger().info(f"Wake word (score={score:.3f})")
+                    self._run_session(stream)
+                    cooldown = cooldown_total
+                    dbg_count = 0
+                    dbg_peak = 0.0
 
-    def _handle_wake_word(self, stream) -> None:
-        """Greeting + continuous 5-minute conversation session.
+    # ================================================================== #
+    # Voice session — continuous listen after wake word
+    # ================================================================== #
 
-        After the greeting, the robot listens continuously.  The beep only
-        fires once at session start and again after each TTS response — NOT
-        between every noise/empty-transcript retry.  This eliminates the
-        annoying rapid-fire beep-drain-fail loop.
+    def _run_session(self, stream) -> None:
+        """Run a voice command session.
 
-        Session ends only when:
-        - User says "Jarvis stop"
-        - 5-minute session clock expires
+        1. Greeting TTS → wait → drain → beep
+        2. Continuous VAD listen loop:
+           - noise/empty/hallucination → silently loop (zero overhead)
+           - matched command → execute → if detection-on, END; else drain+beep+loop
+           - "Jarvis stop" → END
+           - 5-min timeout → END
         """
-        from jetauto_voice.intent_mapper import _HALLUCINATIONS
-
-        # Greeting — drain + beep once so user knows when to speak
-        self._speak_blocking("Yes, how may I help you?")
-        self._drain_mic(stream, self._vad_drain_ms + 200)
+        # --- Greeting ---
+        self._speak_and_wait("Yes, how may I help you?")
+        self._drain_stream(stream, 800)
         self._play_beep()
-        self.get_logger().info("Listening — say a command or 'Jarvis stop' to end")
+        self.get_logger().info("Session open — listening for commands")
 
-        session_start = time.time()
-        session_timeout_sec = 300.0  # 5-minute total session
+        t0 = time.time()
 
         while not self._shutdown_event.is_set():
-            if time.time() - session_start > session_timeout_sec:
-                self.get_logger().info("Session timeout (5 min) — returning to wake word")
+            # Session clock
+            if time.time() - t0 > self._session_timeout_sec:
+                self.get_logger().info("Session timeout — returning to wake word")
                 break
 
-            # Capture one utterance (returns immediately to loop on noise/silence)
-            audio_float = self._capture_vad(stream)
-
-            if audio_float is None:
-                # No speech in vad_listen_timeout_sec — just loop silently
+            # --- Capture speech ---
+            audio = self._capture_speech(stream)
+            if audio is None:
+                # Silence timeout — no speech for vad_listen_timeout_sec
+                # Just loop — session stays open until 5-min timeout
                 continue
 
-            if len(audio_float) == 0:
-                # Too-short noise burst — loop silently, no beep
+            # --- Transcribe ---
+            text = self._transcribe(audio)
+            if not text:
+                continue
+            if text.lower().strip().rstrip("?.!,") in _HALLUCINATIONS:
                 continue
 
-            text = self._transcribe(audio_float)
-            if not text or text.lower().rstrip("?.!,") in _HALLUCINATIONS:
-                continue
+            self.get_logger().info(f'Heard: "{text}"')
 
-            self.get_logger().info(f'Transcribed: "{text}"')
-
+            # --- Jarvis stop ---
             if self._is_stop_command(text):
-                self.get_logger().info("Stop command — returning to wake word")
-                self._speak_blocking("Okay.")
+                self.get_logger().info("Jarvis stop — ending session")
+                self._speak_and_wait("Okay.")
                 break
 
-            # Execute command, then drain + beep so user knows it's their turn again
-            self._dispatch_intent(text)
-            self._drain_mic(stream, self._vad_drain_ms + 200)
+            # --- Dispatch intent ---
+            end_session = self._dispatch_intent(text)
+            if end_session:
+                # Detection was enabled — stop voice to avoid mic interference
+                self.get_logger().info("Detection active — ending voice session")
+                break
+
+            # Command executed, drain TTS echo then keep listening
+            self._drain_stream(stream, 800)
             self._play_beep()
 
-    def _drain_mic(self, stream, ms: int) -> None:
-        """Read and discard mic audio for exactly `ms` wall-clock milliseconds,
-        then flush any remaining frames still queued in the stream's ring buffer.
+    # ================================================================== #
+    # Speech capture (VAD only — no drains, no beeps)
+    # ================================================================== #
 
-        Two-phase drain:
-        1. Wall-clock loop — ensures we wait the full real-time duration even
-           when the ring buffer is pre-filled with stale TTS audio.
-        2. Buffer flush — empties any frames that accumulated during the wait,
-           so VAD doesn't immediately see old audio on the next read.
+    def _capture_speech(self, stream) -> Optional[np.ndarray]:
+        """Capture one utterance using WebRTC VAD.
 
-        Args:
-            stream: Open sounddevice InputStream.
-            ms: Milliseconds to drain.
+        Returns float32 audio on success, None on silence timeout.
+        Silently ignores noise bursts (too-short detections).
+
+        This method does NO draining or beeping — the caller manages those.
         """
+        VAD_MS = 20
+        VAD_SAMPLES = self._sample_rate * VAD_MS // 1000
+
+        try:
+            import webrtcvad
+            vad = webrtcvad.Vad(self._vad_aggressiveness)
+        except ImportError:
+            self.get_logger().warn("webrtcvad missing — fixed 5s capture")
+            data, _ = stream.read(int(self._sample_rate * 5.0))
+            return data.flatten().astype(np.float32) / 32768.0
+
+        timeout_frames = int(self._vad_listen_timeout_sec * 1000 / VAD_MS)
+        max_frames = int(self._vad_max_duration_sec * 1000 / VAD_MS)
+        min_speech = max(1, self._vad_min_speech_ms // VAD_MS)
+
+        frames = []
+        speech_run = 0
+        silence_run = 0
+        speech_total = 0
+        started = False
+
+        for i in range(max_frames):
+            if self._shutdown_event.is_set():
+                return None
+
+            chunk, _ = stream.read(VAD_SAMPLES)
+            flat = chunk.flatten()
+            frames.append(flat)
+
+            try:
+                is_speech = vad.is_speech(flat.tobytes(), self._sample_rate)
+            except Exception:
+                is_speech = False
+
+            if is_speech:
+                speech_run += 1
+                speech_total += 1
+                silence_run = 0
+                if speech_run >= self._vad_speech_start_frames and not started:
+                    started = True
+            else:
+                speech_run = 0
+                if started:
+                    silence_run += 1
+                    if silence_run >= self._vad_speech_end_frames:
+                        ms = len(frames) * VAD_MS
+                        self.get_logger().info(f"Captured {ms}ms ({speech_total * VAD_MS}ms speech)")
+                        break
+                elif i >= timeout_frames:
+                    return None   # true silence — no speech at all
+
+        if not started:
+            return None
+
+        if speech_total < min_speech:
+            return None   # noise burst — caller will silently retry
+
+        return np.concatenate(frames).astype(np.float32) / 32768.0
+
+    # ================================================================== #
+    # Helpers
+    # ================================================================== #
+
+    def _drain_stream(self, stream, ms: int) -> None:
+        """Discard mic audio for `ms` wall-clock milliseconds."""
         deadline = time.time() + ms / 1000.0
         while time.time() < deadline and not self._shutdown_event.is_set():
             try:
@@ -472,303 +404,101 @@ class VoiceCommanderNode(Node):
             except Exception:
                 time.sleep(0.01)
 
-        # Flush any remaining buffered frames so VAD starts on fresh audio
+    def _play_beep(self, freq: float = 880.0, dur: float = 0.15, vol: float = 0.4):
+        """Audible 'your turn' cue."""
         try:
-            while stream.read_available >= _OWW_CHUNK_SAMPLES:
-                stream.read(_OWW_CHUNK_SAMPLES)
+            import sounddevice as sd
+            t = np.linspace(0, dur, int(self._sample_rate * dur), endpoint=False)
+            sd.play((np.sin(2 * np.pi * freq * t) * vol).astype(np.float32),
+                     samplerate=self._sample_rate)
+            sd.wait()
         except Exception:
             pass
 
-    def _capture_vad(self, stream) -> Optional[np.ndarray]:
-        """Capture speech using WebRTC VAD with automatic start/end detection.
-
-        Drains the mic buffer first (clears wake word / TTS echo), then
-        listens for speech. Returns audio once the speaker stops talking.
-        Returns None on timeout or if speech is too short to be a real command.
-
-        Falls back to 5s fixed capture if webrtcvad is not installed.
-
-        Args:
-            stream: Open sounddevice InputStream.
-        """
-        VAD_FRAME_MS = 20                          # webrtcvad requires 10/20/30ms
-        VAD_FRAME_SAMPLES = self._sample_rate * VAD_FRAME_MS // 1000  # 320 @ 16kHz
-
-        try:
-            import webrtcvad  # type: ignore[import]
-            vad = webrtcvad.Vad(self._vad_aggressiveness)
-        except ImportError:
-            self.get_logger().warn("webrtcvad not installed — falling back to 5s fixed capture")
-            audio_data, _ = stream.read(int(self._sample_rate * 5.0))
-            return audio_data.flatten().astype(np.float32) / 32768.0
-
-        # Safety: if TTS is still speaking (race condition), drain until done.
-        # Normally _speak_blocking() already waited, so this is rarely needed.
-        tts_wait_start = time.time()
-        while self._tts_speaking and not self._shutdown_event.is_set():
-            if time.time() - tts_wait_start > 15.0:
-                break
-            stream.read(VAD_FRAME_SAMPLES)
-
-        # Fixed mini-drain: 5 frames × 20ms = 100ms.
-        # Clears any residual audio still in the stream's ring buffer after
-        # the wall-clock drain — read_available is unreliable on blocking streams.
-        for _ in range(5):
-            try:
-                stream.read(VAD_FRAME_SAMPLES)
-            except Exception:
-                break
-
-        timeout_frames = int(self._vad_listen_timeout_sec * 1000 / VAD_FRAME_MS)
-        max_frames = int(self._vad_max_duration_sec * 1000 / VAD_FRAME_MS)
-        min_speech_frames = max(1, self._vad_min_speech_ms // VAD_FRAME_MS)
-
-        audio_frames = []
-        speech_run = 0
-        silence_run = 0
-        speech_frame_count = 0
-        speech_started = False
-
-        for i in range(max_frames):
-            if self._shutdown_event.is_set():
-                return None
-
-            chunk, _ = stream.read(VAD_FRAME_SAMPLES)
-            chunk_flat = chunk.flatten()
-            audio_frames.append(chunk_flat)
-
-            try:
-                is_speech = vad.is_speech(chunk_flat.tobytes(), self._sample_rate)
-            except Exception:
-                is_speech = False
-
-            if is_speech:
-                speech_run += 1
-                speech_frame_count += 1
-                silence_run = 0
-                if speech_run >= self._vad_speech_start_frames and not speech_started:
-                    speech_started = True
-                    self.get_logger().info("Listening...")
-            else:
-                speech_run = 0
-                if speech_started:
-                    silence_run += 1
-                    if silence_run >= self._vad_speech_end_frames:
-                        elapsed_ms = len(audio_frames) * VAD_FRAME_MS
-                        self.get_logger().info(f"*** DONE — captured {elapsed_ms}ms, transcribing...")
-                        break
-                elif i >= timeout_frames:
-                    self.get_logger().info("Timeout — no speech detected")
-                    return None
-
-        if not speech_started:
-            # True timeout — no speech detected at all
-            return None
-
-        if speech_frame_count < min_speech_frames:
-            self.get_logger().info(
-                f"Too short ({speech_frame_count * VAD_FRAME_MS}ms actual speech) — ignoring"
-            )
-            # Return empty array to signal "noise, not timeout" — caller will retry
-            return np.array([], dtype=np.float32)
-
-        return np.concatenate(audio_frames).astype(np.float32) / 32768.0
-
-    def _play_beep(self, freq: float = 880.0, duration: float = 0.15, volume: float = 0.4) -> None:
-        """Play a short sine-wave beep directly via sounddevice.
-
-        Gives the user an immediate audible 'speak now' cue without
-        depending on the TTS node being running.
-
-        Args:
-            freq: Frequency in Hz. Default 880 Hz (A5).
-            duration: Duration in seconds. Default 0.15s.
-            volume: Amplitude in [0.0, 1.0]. Default 0.4.
-        """
-        try:
-            import sounddevice as sd  # type: ignore[import]
-            t = np.linspace(0, duration, int(self._sample_rate * duration), endpoint=False)
-            tone = (np.sin(2 * np.pi * freq * t) * volume).astype(np.float32)
-            sd.play(tone, samplerate=self._sample_rate)
-            sd.wait()
-        except Exception as exc:
-            self.get_logger().debug(f"Beep playback failed: {exc}")
-
-
-
-    # ------------------------------------------------------------------ #
-    # STT
-    # ------------------------------------------------------------------ #
+    def _speak_and_wait(self, text: str) -> None:
+        """Publish TTS and sleep for the estimated speech duration."""
+        msg = String()
+        msg.data = text
+        self._tts_pub.publish(msg)
+        # Generous estimate: word count / WPS + overhead for pyttsx3 latency
+        wait = max(1.5, len(text.split()) / _TTS_WPS + _TTS_OVERHEAD)
+        time.sleep(wait)
 
     def _transcribe(self, audio: np.ndarray) -> str:
-        """Transcribe a float32 audio array using faster-whisper.
-
-        Args:
-            audio: float32 numpy array, normalized to [-1.0, 1.0], 16 kHz mono.
-
-        Returns:
-            Stripped transcription string, or ``""`` on failure.
-        """
         if self._stt_model is None:
-            self.get_logger().error("STT model not loaded — cannot transcribe")
+            self.get_logger().error("STT not loaded")
             return ""
-
         try:
-            segments, _info = self._stt_model.transcribe(
-                audio,
-                language="en",
-                beam_size=1,   # greedy — 4-5x faster, fine for short commands
-                vad_filter=True,
+            segs, _ = self._stt_model.transcribe(
+                audio, language="en", beam_size=1, vad_filter=True,
             )
-            return " ".join(seg.text for seg in segments).strip()
-        except Exception as exc:
-            self.get_logger().error(f"STT transcription failed: {exc}")
+            return " ".join(s.text for s in segs).strip()
+        except Exception as e:
+            self.get_logger().error(f"STT error: {e}")
             return ""
 
-    # ------------------------------------------------------------------ #
+    # ================================================================== #
     # Intent dispatch
-    # ------------------------------------------------------------------ #
+    # ================================================================== #
 
     def _is_stop_command(self, text: str) -> bool:
-        """Return True if the user said 'Jarvis stop' to end the session.
-
-        Only explicit Jarvis-addressed stop commands end the session — avoids
-        accidentally stopping on "stop detection", "cancel vision", etc.
-        """
         t = text.lower().strip().rstrip("?.!,")
-        return any(phrase in t for phrase in [
-            "jarvis stop",
-            "stop jarvis",
-            "hey jarvis stop",
-            "jarvis quit",
-            "jarvis exit",
-            "jarvis done",
-            "jarvis goodbye",
-            "jarvis bye",
+        return any(p in t for p in [
+            "jarvis stop", "stop jarvis", "hey jarvis stop",
+            "jarvis quit", "jarvis done", "jarvis bye",
         ])
 
-    def _dispatch_intent(self, text: str) -> None:
-        """Route a transcript to the appropriate action.
+    def _dispatch_intent(self, text: str) -> bool:
+        """Execute a voice command. Returns True if session should end."""
 
-        Checks for:
-        1. Find-object intent  → enable detection + publish target + TTS
-        2. Enable-detection command → enable detection + TTS
-        3. Disable-detection command → disable detection + TTS
-        4. Unknown → TTS apology
-
-        Args:
-            text: Transcribed speech string.
-        """
-        # 1. Find-object intent
+        # 1. Find object → enable detection + end session
         result = extract_target(text)
         if result is not None:
             yolo_label, raw_object = result
-            self.get_logger().info(
-                f'Intent: find "{raw_object}" → YOLO class "{yolo_label}"'
-            )
-            self._publish_detection_enable(True)
-            self._publish_target(yolo_label)
-            self._speak_blocking(f"Looking for {raw_object}.")
-            return
+            self.get_logger().info(f'Find "{raw_object}" → YOLO "{yolo_label}"')
+            self._pub_enable(True)
+            self._pub_target(yolo_label)
+            self._speak_and_wait(f"Looking for {raw_object}.")
+            return True   # end session — detection TTS will use mic
 
-        # 2. Enable detection
+        # 2. Enable detection → end session
         if is_enable_command(text):
-            self.get_logger().info("Intent: enable detection")
-            self._publish_detection_enable(True)
-            self._speak_blocking("Detection enabled.")
-            return
+            self.get_logger().info("Enable detection")
+            self._pub_enable(True)
+            self._speak_and_wait("Detection enabled.")
+            return True
 
-        # 3. Disable detection
+        # 3. Disable detection → stay in session
         if is_disable_command(text):
-            self.get_logger().info("Intent: disable detection")
-            self._publish_detection_enable(False)
-            self._speak_blocking("Detection disabled.")
-            return
+            self.get_logger().info("Disable detection")
+            self._pub_enable(False)
+            self._speak_and_wait("Detection disabled.")
+            return False
 
-        # 4. Unknown
-        self.get_logger().info(f'No intent matched for: "{text}"')
-        self._speak_blocking("Sorry, I didn't understand that.")
+        # 4. Unmatched — silently ignore, keep listening
+        self.get_logger().info(f'No intent for: "{text}"')
+        return False
 
-    # ------------------------------------------------------------------ #
-    # Publishers
-    # ------------------------------------------------------------------ #
-
-    def _on_tts_speaking(self, msg: Bool) -> None:
-        """Track whether the TTS node is currently playing audio."""
-        self._tts_speaking = msg.data
-
-    def _speak_blocking(self, text: str) -> None:
-        """Publish TTS and block until speech is guaranteed to have finished.
-
-        Uses /tts/speaking flag when available, but always enforces a minimum
-        floor based on word count — pyttsx3 on Jetson sometimes returns from
-        runAndWait() before audio has fully played out.
-
-        Args:
-            text: Text to speak.
-        """
-        self._publish_tts(text)
-        call_time = time.time()
-
-        # Floor estimate: words / 2.5 WPS + 0.8s buffer for pyttsx3 latency
-        words = len(text.split())
-        min_wait_sec = max(1.5, words / 2.5 + 0.8)
-
-        # Wait for TTS to START (up to 1.5 s for ROS dispatch + queue)
-        start_deadline = time.time() + 1.5
-        while not self._tts_speaking and time.time() < start_deadline:
-            if self._shutdown_event.is_set():
-                return
-            time.sleep(0.05)
-
-        if self._tts_speaking:
-            # Wait for TTS to FINISH (up to 20 s safety cap)
-            end_deadline = time.time() + 20.0
-            while self._tts_speaking and time.time() < end_deadline:
-                if self._shutdown_event.is_set():
-                    return
-                time.sleep(0.05)
-
-        # Always enforce minimum — handles pyttsx3 early runAndWait() return
-        elapsed = time.time() - call_time
-        if elapsed < min_wait_sec:
-            time.sleep(min_wait_sec - elapsed)
-
-    def _publish_detection_enable(self, enabled: bool) -> None:
-        """Publish to /jetauto/detection/enable."""
+    def _pub_enable(self, on: bool) -> None:
         msg = Bool()
-        msg.data = enabled
+        msg.data = on
         self._detection_pub.publish(msg)
-        state = "ENABLED" if enabled else "DISABLED"
-        self.get_logger().info(f"Detection {state}")
+        self.get_logger().info(f"Detection {'ENABLED' if on else 'DISABLED'}")
 
-    def _publish_target(self, label: str) -> None:
-        """Publish target YOLO class label to /jetauto/detection/target."""
+    def _pub_target(self, label: str) -> None:
         msg = String()
         msg.data = label
         self._target_pub.publish(msg)
 
-    def _publish_tts(self, text: str) -> None:
-        """Publish text to /tts/speak for the TTS node."""
-        msg = String()
-        msg.data = text
-        self._tts_pub.publish(msg)
-
-    # ------------------------------------------------------------------ #
+    # ================================================================== #
     # Cleanup
-    # ------------------------------------------------------------------ #
+    # ================================================================== #
 
     def destroy_node(self) -> None:
-        """Signal the audio thread to stop before destroying the node."""
         self._shutdown_event.set()
         if self._listener_thread.is_alive():
             self._listener_thread.join(timeout=3.0)
         super().destroy_node()
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 
 
 def main(args=None) -> None:
