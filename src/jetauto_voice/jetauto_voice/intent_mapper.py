@@ -264,11 +264,11 @@ def extract_target(text: str) -> Optional[tuple[str, str]]:
                 break
 
     # Last resort: bare noun ("the person", "phone", "chair").
-    # Handles conversational shorthand after the wake word greeting.
-    # Only accepted if the text maps to a known YOLO class.
+    # Exact COCO class match only — no prefix/substring matching here,
+    # otherwise "stop" → prefix-matches "stop sign" and hijacks stop commands.
     if raw_object is None:
         bare = re.sub(r'^(?:a|an|the|my|some)\s+', '', text.lower().strip().rstrip('?.!,'))
-        if bare and map_to_yolo_class(bare) is not None:
+        if bare and bare in COCO_CLASSES:
             raw_object = bare
 
     if raw_object is None:
@@ -367,12 +367,16 @@ def is_disable_command(text: str) -> bool:
         for phrase in [
             "stop vision",
             "stop detection",
+            "stop finding",
+            "stop it",
             "disable detection",
             "disable vision",
             "turn off detection",
             "turn off vision",
             "stop looking",
             "stop scanning",
+            "cancel detection",
+            "cancel vision",
         ]
     )
 

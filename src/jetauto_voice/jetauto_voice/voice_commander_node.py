@@ -417,10 +417,9 @@ class VoiceCommanderNode(Node):
         max_noise_retries = 3
 
         while not self._shutdown_event.is_set():
-            # Always drain before VAD — first listen needs it too (clears greeting echo)
+            # Always drain then beep — gives user a clear "start speaking" cue
             self._drain_mic(stream, drain_ms)
-            if not first_listen:
-                self._play_beep()
+            self._play_beep()
             self.get_logger().info("SPEAK NOW")
 
             first_listen = False
