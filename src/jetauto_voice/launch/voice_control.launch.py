@@ -80,8 +80,8 @@ def generate_launch_description():
     )
     vad_aggressiveness_arg = DeclareLaunchArgument(
         'vad_aggressiveness',
-        default_value='3',
-        description='WebRTC VAD aggressiveness 0-3. 3=most aggressive noise filtering.',
+        default_value='1',
+        description='WebRTC VAD aggressiveness 0-3. Higher = more strict (requires louder speech).',
     )
     vad_listen_timeout_sec_arg = DeclareLaunchArgument(
         'vad_listen_timeout_sec',

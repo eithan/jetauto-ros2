@@ -124,8 +124,8 @@ class VoiceCommanderNode(Node):
         self.declare_parameter("stt_device", "cuda")
         self.declare_parameter("stt_compute_type", "float16")
         self.declare_parameter("mic_device_index", -1)
-        self.declare_parameter("vad_aggressiveness", 3)
-        self.declare_parameter("vad_drain_ms", 1200)
+        self.declare_parameter("vad_aggressiveness", 1)
+        self.declare_parameter("vad_drain_ms", 600)
         self.declare_parameter("vad_speech_start_frames", 6)
         self.declare_parameter("vad_speech_end_frames", 30)
         self.declare_parameter("vad_min_speech_ms", 400)
@@ -396,7 +396,7 @@ class VoiceCommanderNode(Node):
         self._speak_blocking("Yes, how may I help you?")
 
         first_listen = True
-        drain_ms = self._vad_drain_ms + 500  # extra buffer for TTS reverb
+        drain_ms = self._vad_drain_ms + 200  # extra buffer for TTS reverb
         noise_retries = 0
         max_noise_retries = 3
 
