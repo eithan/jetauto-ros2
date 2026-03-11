@@ -397,83 +397,59 @@ class VoiceCommanderNode(Node):
                     _debug_peak_score = 0.0
 
     def _handle_wake_word(self, stream) -> None:
-        """Greeting + conversation loop activated by wake word.
+        """Greeting + continuous 5-minute conversation session.
 
-        First activation says "Yes, how may I help you?" then enters a listen
-        loop. Each subsequent listen within the same session uses a beep.
-        The loop exits (returning to wake word listening) when:
-        - No speech is detected (timeout)
-        - STT produces an empty or hallucinated transcript
-        - The user says "stop" / "cancel" / "never mind"
+        After the greeting, the robot listens continuously.  The beep only
+        fires once at session start and again after each TTS response — NOT
+        between every noise/empty-transcript retry.  This eliminates the
+        annoying rapid-fire beep-drain-fail loop.
+
+        Session ends only when:
+        - User says "Jarvis stop"
+        - 5-minute session clock expires
         """
         from jetauto_voice.intent_mapper import _HALLUCINATIONS
 
-        # Greeting on first activation — block until TTS finishes
+        # Greeting — drain + beep once so user knows when to speak
         self._speak_blocking("Yes, how may I help you?")
+        self._drain_mic(stream, self._vad_drain_ms + 200)
+        self._play_beep()
+        self.get_logger().info("Listening — say a command or 'Jarvis stop' to end")
 
-        first_listen = True
-        drain_ms = self._vad_drain_ms + 200  # extra buffer for TTS reverb
-        noise_retries = 0
-        max_noise_retries = 3
         session_start = time.time()
-        session_timeout_sec = 300.0  # 5-minute session limit
+        session_timeout_sec = 300.0  # 5-minute total session
 
         while not self._shutdown_event.is_set():
-            # 5-minute session timeout
             if time.time() - session_start > session_timeout_sec:
                 self.get_logger().info("Session timeout (5 min) — returning to wake word")
                 break
 
-            # Always drain then beep — gives user a clear "start speaking" cue
-            self._drain_mic(stream, drain_ms)
-            self._play_beep()
-            self.get_logger().info("SPEAK NOW")
-
-            first_listen = False
-
+            # Capture one utterance (returns immediately to loop on noise/silence)
             audio_float = self._capture_vad(stream)
 
             if audio_float is None:
-                # True silence timeout — no speech at all, user is done
-                self.get_logger().info("Listen timeout — returning to wake word")
-                break
+                # No speech in vad_listen_timeout_sec — just loop silently
+                continue
 
             if len(audio_float) == 0:
-                # Too-short / noise burst — retry (don't exit)
-                noise_retries += 1
-                self.get_logger().info(
-                    f"Noise detected — listening again ({noise_retries}/{max_noise_retries})"
-                )
-                if noise_retries >= max_noise_retries:
-                    # Too much noise — ask user to try again and reset
-                    self.get_logger().info("Too many noise retries — asking to repeat")
-                    self._speak_blocking("I'm having trouble hearing you. Please try again.")
-                    noise_retries = 0
+                # Too-short noise burst — loop silently, no beep
                 continue
-
-            # Reset noise counter on successful capture
-            noise_retries = 0
 
             text = self._transcribe(audio_float)
-            if not text:
-                self.get_logger().info("Empty transcript — retrying")
-                continue
-
-            # Filter Whisper hallucinations — retry silently
-            if text.lower().rstrip("?.!,") in _HALLUCINATIONS:
-                self.get_logger().info(f'Hallucination filtered: "{text}" — retrying')
+            if not text or text.lower().rstrip("?.!,") in _HALLUCINATIONS:
                 continue
 
             self.get_logger().info(f'Transcribed: "{text}"')
 
-            # Stop command exits the loop
             if self._is_stop_command(text):
                 self.get_logger().info("Stop command — returning to wake word")
                 self._speak_blocking("Okay.")
                 break
 
-            # Dispatch intent; block until response TTS finishes, then loop
+            # Execute command, then drain + beep so user knows it's their turn again
             self._dispatch_intent(text)
+            self._drain_mic(stream, self._vad_drain_ms + 200)
+            self._play_beep()
 
     def _drain_mic(self, stream, ms: int) -> None:
         """Read and discard mic audio for exactly `ms` wall-clock milliseconds,
