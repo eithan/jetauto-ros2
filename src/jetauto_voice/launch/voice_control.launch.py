@@ -55,7 +55,7 @@ def generate_launch_description():
     )
     wake_word_threshold_arg = DeclareLaunchArgument(
         'wake_word_threshold',
-        default_value='0.65',
+        default_value='0.5',
         description='Wake word detection threshold [0.0, 1.0]',
     )
     stt_model_size_arg = DeclareLaunchArgument(

@@ -119,7 +119,7 @@ class VoiceCommanderNode(Node):
 
         # -- Declare parameters --
         self.declare_parameter("wake_word_model", "hey_jarvis")
-        self.declare_parameter("wake_word_threshold", 0.65)
+        self.declare_parameter("wake_word_threshold", 0.5)
         self.declare_parameter("stt_model_size", "tiny.en")
         self.declare_parameter("stt_device", "cuda")
         self.declare_parameter("stt_compute_type", "float16")
@@ -352,6 +352,12 @@ class VoiceCommanderNode(Node):
             device=device,
         ) as stream:
             cooldown_remaining = 0
+            # Periodic score logging — log peak OWW score every ~5s so we can
+            # see whether the mic is working and what scores "Hey Jarvis" gets.
+            _debug_log_interval = int(5.0 * self._sample_rate / _OWW_CHUNK_SAMPLES)
+            _debug_chunk_count = 0
+            _debug_peak_score = 0.0
+
             while not self._shutdown_event.is_set():
                 audio_chunk, _ = stream.read(_OWW_CHUNK_SAMPLES)
                 audio_flat = audio_chunk.flatten()
@@ -359,8 +365,6 @@ class VoiceCommanderNode(Node):
                 # Skip OWW evaluation during cooldown; still drain the stream
                 if cooldown_remaining > 0:
                     cooldown_remaining -= 1
-                    # Feed chunks to OWW during cooldown to flush stale state
-                    # but don't act on the scores
                     if self._wake_word_detector is not None:
                         self._wake_word_detector.predict(audio_flat)
                     continue
@@ -371,14 +375,26 @@ class VoiceCommanderNode(Node):
                 # Pick the maximum score across all loaded models
                 score: float = max(prediction.values()) if prediction else 0.0
 
+                # Track peak for periodic debug log
+                if score > _debug_peak_score:
+                    _debug_peak_score = score
+                _debug_chunk_count += 1
+                if _debug_chunk_count >= _debug_log_interval:
+                    self.get_logger().info(
+                        f"[OWW] peak score last 5s: {_debug_peak_score:.3f} "
+                        f"(threshold={self._wake_word_threshold})"
+                    )
+                    _debug_chunk_count = 0
+                    _debug_peak_score = 0.0
+
                 if score >= self._wake_word_threshold:
                     self.get_logger().info(
                         f"Wake word detected (score={score:.3f})"
                     )
                     self._handle_wake_word(stream)
-                    # Apply cooldown after returning from capture to suppress
-                    # any residual high scores still in OWW's sliding window
                     cooldown_remaining = cooldown_total
+                    _debug_chunk_count = 0
+                    _debug_peak_score = 0.0
 
     def _handle_wake_word(self, stream) -> None:
         """Greeting + conversation loop activated by wake word.
