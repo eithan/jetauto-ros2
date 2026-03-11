@@ -128,7 +128,7 @@ class VoiceCommanderNode(Node):
         self.declare_parameter("vad_drain_ms", 600)
         self.declare_parameter("vad_speech_start_frames", 6)
         self.declare_parameter("vad_speech_end_frames", 30)
-        self.declare_parameter("vad_min_speech_ms", 400)
+        self.declare_parameter("vad_min_speech_ms", 200)
         self.declare_parameter("vad_listen_timeout_sec", 10.0)
         self.declare_parameter("vad_max_duration_sec", 10.0)
         self.declare_parameter("wake_cooldown_sec", 5.0)
@@ -510,18 +510,16 @@ class VoiceCommanderNode(Node):
             audio_data, _ = stream.read(int(self._sample_rate * 5.0))
             return audio_data.flatten().astype(np.float32) / 32768.0
 
-        # If TTS is still speaking (race condition), drain mic until it stops
+        # Safety: if TTS is still speaking (race condition), drain until done.
+        # Normally _speak_blocking() already waited, so this is rarely needed.
         tts_wait_start = time.time()
         while self._tts_speaking and not self._shutdown_event.is_set():
             if time.time() - tts_wait_start > 15.0:
                 break
             stream.read(VAD_FRAME_SAMPLES)
 
-        # Drain buffer in real-time — wall-clock wait, not sample count,
-        # so stale buffered audio doesn't make this return instantly.
-        drain_deadline = time.time() + self._vad_drain_ms / 1000.0
-        while time.time() < drain_deadline and not self._shutdown_event.is_set():
-            stream.read(VAD_FRAME_SAMPLES)
+        # No additional drain here — caller (_handle_wake_word) already did a
+        # wall-clock drain before logging SPEAK NOW, so VAD opens immediately.
 
         timeout_frames = int(self._vad_listen_timeout_sec * 1000 / VAD_FRAME_MS)
         max_frames = int(self._vad_max_duration_sec * 1000 / VAD_FRAME_MS)
