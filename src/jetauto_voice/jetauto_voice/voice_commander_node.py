@@ -274,7 +274,7 @@ class VoiceCommanderNode(Node):
            - 5-min timeout → END
         """
         # --- Greeting ---
-        self._speak_and_wait("Yes, how may I help you?")
+        self._speak_and_wait("Yes?")
         self._drain_stream(stream, 800)
         self._play_beep()
         self.get_logger().info("Session open — listening for commands")
@@ -442,7 +442,9 @@ class VoiceCommanderNode(Node):
     # ================================================================== #
 
     def _is_stop_command(self, text: str) -> bool:
-        t = text.lower().strip().rstrip("?.!,")
+        # Strip all punctuation so "Jarvis, stop." matches same as "Jarvis stop"
+        import re
+        t = re.sub(r'[^\w\s]', '', text.lower().strip())
         return any(p in t for p in [
             "jarvis stop", "stop jarvis", "hey jarvis stop",
             "jarvis quit", "jarvis done", "jarvis bye",
