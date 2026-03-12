@@ -269,7 +269,7 @@ class DashboardNode(Node):
             return  # already running
         try:
             self._vision_proc = subprocess.Popen(
-                ['ros2', 'launch', 'jetauto_vision', 'vision_launch.py'],
+                ['ros2', 'launch', 'jetauto_tts', 'tts_launch.py'],
                 preexec_fn=os.setsid,
             )
             self.get_logger().info(f'Vision pipeline launched (pid {self._vision_proc.pid})')
