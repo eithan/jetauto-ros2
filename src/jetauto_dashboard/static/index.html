@@ -575,6 +575,7 @@ html, body {
             🔋 Battery
           </div>
           <div class="stat-value" id="batteryValue">N/A</div>
+          <div id="batteryVoltage" style="display:none; font-size:12px; color:var(--text-dim); margin-top:-4px;"></div>
           <div class="battery-bar-container">
             <div class="battery-bar" id="batteryBar" style="width: 0%"></div>
           </div>
@@ -680,6 +681,7 @@ socket.on('config', (cfg) => {
 });
 
 socket.on('state', (s) => {
+  window._lastBatteryVoltage = s.battery_voltage || null;
   updateBattery(s.battery);
   updateTemps(s.cpu_temp, s.gpu_temp);
   updateUptime(s.uptime);
@@ -710,6 +712,13 @@ function updateBattery(val) {
   el.textContent = val.toFixed(0) + '%';
   el.className = 'stat-value';
   bar.style.width = Math.min(100, Math.max(0, val)) + '%';
+
+  // Show voltage if available
+  const voltEl = document.getElementById('batteryVoltage');
+  if (voltEl && window._lastBatteryVoltage != null) {
+    voltEl.textContent = window._lastBatteryVoltage.toFixed(2) + 'V';
+    voltEl.style.display = '';
+  }
 
   if (val > 50) {
     bar.className = 'battery-bar';

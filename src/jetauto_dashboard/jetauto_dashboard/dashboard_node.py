@@ -52,6 +52,7 @@ class DashboardNode(Node):
         # -- State --
         self.state = {
             'battery': None,
+            'battery_voltage': None,
             'cpu_temp': None,
             'gpu_temp': None,
             'voice_enabled': False,
@@ -74,6 +75,10 @@ class DashboardNode(Node):
         )
 
         # -- Subscribers --
+        # Battery: raw millivolts from the robot controller
+        self.create_subscription(
+            Float32, '/ros_robot_controller/battery', self._on_battery_mv, qos_best_effort)
+        # Also accept pre-computed percentage on /jetauto/battery
         self.create_subscription(
             Float32, '/jetauto/battery', self._on_battery, qos_best_effort)
         self.create_subscription(
@@ -110,6 +115,17 @@ class DashboardNode(Node):
         self.get_logger().info('Dashboard node initialized')
 
     # ── Subscription callbacks ─────────────────────────────────────
+
+    def _on_battery_mv(self, msg: Float32):
+        """Convert millivolts from robot controller to battery percentage.
+
+        3S LiPo: 9.0V (0%) to 12.6V (100%).
+        """
+        voltage = msg.data / 1000.0
+        pct = max(0, min(100, int((voltage - 9.0) / (12.6 - 9.0) * 100)))
+        self.state['battery'] = float(pct)
+        self.state['battery_voltage'] = round(voltage, 2)
+        self._emit_state()
 
     def _on_battery(self, msg: Float32):
         self.state['battery'] = round(msg.data, 1)
