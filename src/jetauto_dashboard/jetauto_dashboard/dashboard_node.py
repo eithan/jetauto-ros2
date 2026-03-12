@@ -17,7 +17,7 @@ from datetime import datetime
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-from std_msgs.msg import Bool, Float32, String
+from std_msgs.msg import Bool, Float32, UInt16, String
 
 # Optional: jetauto_msgs for detection log
 try:
@@ -75,9 +75,9 @@ class DashboardNode(Node):
         )
 
         # -- Subscribers --
-        # Battery: raw millivolts from the robot controller
+        # Battery: raw millivolts (UInt16) from the robot controller
         self.create_subscription(
-            Float32, '/ros_robot_controller/battery', self._on_battery_mv, qos_best_effort)
+            UInt16, '/ros_robot_controller/battery', self._on_battery_mv, qos_best_effort)
         # Also accept pre-computed percentage on /jetauto/battery
         self.create_subscription(
             Float32, '/jetauto/battery', self._on_battery, qos_best_effort)
@@ -243,8 +243,6 @@ class DashboardNode(Node):
             self._voice_proc = subprocess.Popen(
                 ['ros2', 'launch', 'jetauto_voice', 'voice_control.launch.py',
                  'mic_device_index:=1', 'vad_aggressiveness:=2'],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
                 preexec_fn=os.setsid,
             )
             self.get_logger().info(f'Voice pipeline launched (pid {self._voice_proc.pid})')
@@ -272,8 +270,6 @@ class DashboardNode(Node):
         try:
             self._vision_proc = subprocess.Popen(
                 ['ros2', 'launch', 'jetauto_vision', 'vision_launch.py'],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
                 preexec_fn=os.setsid,
             )
             self.get_logger().info(f'Vision pipeline launched (pid {self._vision_proc.pid})')
