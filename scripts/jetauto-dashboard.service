@@ -1,0 +1,31 @@
+# /etc/systemd/system/jetauto-dashboard.service
+# 
+# Auto-launch the JetAuto dashboard on boot.
+#
+# Install:
+#   sudo cp scripts/jetauto-dashboard.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable jetauto-dashboard
+#   sudo systemctl start jetauto-dashboard
+#
+# Logs:
+#   journalctl -u jetauto-dashboard -f
+
+[Unit]
+Description=JetAuto Dashboard Control Panel
+After=network.target graphical.target
+Wants=graphical.target
+
+[Service]
+Type=simple
+User=ubuntu
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/ubuntu/.Xauthority
+Environment=DASHBOARD_PORT=5000
+WorkingDirectory=/home/ubuntu/ros2_ws/src/jetauto-ros2
+ExecStart=/home/ubuntu/ros2_ws/src/jetauto-ros2/scripts/start-dashboard.sh --kiosk
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical.target
