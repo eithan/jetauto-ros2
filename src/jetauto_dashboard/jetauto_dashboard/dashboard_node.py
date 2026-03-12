@@ -7,7 +7,9 @@ via WebSocket for real-time state updates and sends commands back to ROS2.
 """
 
 import os
+import glob
 import time
+import subprocess
 import threading
 from datetime import datetime
 
@@ -39,6 +41,8 @@ class DashboardNode(Node):
         self.declare_parameter('port', 5000)
         self.declare_parameter('host', '0.0.0.0')
         self.declare_parameter('robot_name', 'JARVIS')
+        self.declare_parameter('system_monitor_interval', 30.0)  # seconds
+        self.declare_parameter('shutdown_command', 'sudo /sbin/poweroff')
 
         # -- State --
         self.state = {
@@ -92,6 +96,12 @@ class DashboardNode(Node):
         # -- Uptime timer --
         self.create_timer(1.0, self._tick_uptime)
 
+        # -- System monitor (reads temps/battery from sysfs directly) --
+        monitor_interval = self.get_parameter('system_monitor_interval').value
+        self.create_timer(monitor_interval, self._poll_system)
+        # Run once at startup
+        self._poll_system()
+
         self.get_logger().info('Dashboard node initialized')
 
     # ── Subscription callbacks ─────────────────────────────────────
@@ -140,6 +150,76 @@ class DashboardNode(Node):
         if self.state['uptime'] % 5 == 0:
             self._emit_state()
 
+    # ── System monitor (direct sysfs reads) ────────────────────────
+
+    def _poll_system(self):
+        """Read CPU/GPU temps and battery from sysfs. Falls back gracefully."""
+        # CPU temp — Jetson thermal zones
+        cpu_temp = self._read_jetson_temp('CPU')
+        if cpu_temp is not None:
+            self.state['cpu_temp'] = cpu_temp
+
+        # GPU temp
+        gpu_temp = self._read_jetson_temp('GPU')
+        if gpu_temp is not None:
+            self.state['gpu_temp'] = gpu_temp
+
+        # Battery — try common power_supply paths
+        battery = self._read_battery()
+        if battery is not None:
+            self.state['battery'] = battery
+
+        self._emit_state()
+
+    def _read_jetson_temp(self, name: str):
+        """Read temperature from Jetson thermal zones by name.
+
+        Jetson Orin Nano exposes zones like:
+          /sys/class/thermal/thermal_zone*/type → 'CPU-therm', 'GPU-therm', etc.
+          /sys/class/thermal/thermal_zone*/temp → millidegrees C
+        """
+        try:
+            for zone_dir in glob.glob('/sys/class/thermal/thermal_zone*'):
+                type_path = os.path.join(zone_dir, 'type')
+                if not os.path.exists(type_path):
+                    continue
+                with open(type_path) as f:
+                    zone_type = f.read().strip()
+                if name.lower() in zone_type.lower():
+                    temp_path = os.path.join(zone_dir, 'temp')
+                    with open(temp_path) as f:
+                        raw = int(f.read().strip())
+                    # Jetson reports millidegrees
+                    temp = raw / 1000.0 if raw > 1000 else float(raw)
+                    return round(temp, 1)
+        except Exception:
+            pass
+        return None
+
+    def _read_battery(self):
+        """Read battery capacity from power_supply sysfs.
+
+        JetAuto uses a LiPo with a fuel gauge. Common paths:
+          /sys/class/power_supply/battery/capacity
+          /sys/class/power_supply/BAT*/capacity
+        """
+        try:
+            for ps_dir in glob.glob('/sys/class/power_supply/*'):
+                cap_path = os.path.join(ps_dir, 'capacity')
+                type_path = os.path.join(ps_dir, 'type')
+                if not os.path.exists(cap_path):
+                    continue
+                # Only read Battery type (not Mains/USB)
+                if os.path.exists(type_path):
+                    with open(type_path) as f:
+                        if f.read().strip() != 'Battery':
+                            continue
+                with open(cap_path) as f:
+                    return float(f.read().strip())
+        except Exception:
+            pass
+        return None
+
     def _emit_state(self):
         """Push current state to all connected browsers."""
         self.socketio.emit('state', self.state)
@@ -167,6 +247,19 @@ class DashboardNode(Node):
         msg.data = True
         self.pub_shutdown.publish(msg)
         self.get_logger().warn('Shutdown requested from dashboard!')
+
+        # Actually shut down the machine after a brief delay
+        shutdown_cmd = self.get_parameter('shutdown_command').value
+        self.get_logger().warn(f'Executing: {shutdown_cmd}')
+
+        def _do_shutdown():
+            time.sleep(2)  # give the UI a moment to show "shutting down"
+            try:
+                subprocess.run(shutdown_cmd.split(), check=True)
+            except Exception as e:
+                self.get_logger().error(f'Shutdown failed: {e}')
+
+        threading.Thread(target=_do_shutdown, daemon=True).start()
 
     def speak(self, text: str):
         msg = String()

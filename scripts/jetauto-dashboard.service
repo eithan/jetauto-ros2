@@ -8,6 +8,9 @@
 #   sudo systemctl enable jetauto-dashboard
 #   sudo systemctl start jetauto-dashboard
 #
+# For shutdown button to work, ensure passwordless sudo for poweroff:
+#   echo "ubuntu ALL=(ALL) NOPASSWD: /sbin/poweroff" | sudo tee /etc/sudoers.d/jetauto-shutdown
+#
 # Logs:
 #   journalctl -u jetauto-dashboard -f
 
