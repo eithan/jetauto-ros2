@@ -9,6 +9,7 @@ via WebSocket for real-time state updates and sends commands back to ROS2.
 import os
 import glob
 import time
+import signal
 import subprocess
 import threading
 from datetime import datetime
@@ -41,8 +42,12 @@ class DashboardNode(Node):
         self.declare_parameter('port', 5000)
         self.declare_parameter('host', '0.0.0.0')
         self.declare_parameter('robot_name', 'JARVIS')
-        self.declare_parameter('system_monitor_interval', 30.0)  # seconds
+        self.declare_parameter('system_monitor_interval', 180.0)  # 3 minutes
         self.declare_parameter('shutdown_command', 'sudo /sbin/poweroff')
+
+        # -- Managed subprocess handles --
+        self._voice_proc = None
+        self._vision_proc = None
 
         # -- State --
         self.state = {
@@ -154,17 +159,14 @@ class DashboardNode(Node):
 
     def _poll_system(self):
         """Read CPU/GPU temps and battery from sysfs. Falls back gracefully."""
-        # CPU temp — Jetson thermal zones
         cpu_temp = self._read_jetson_temp('CPU')
         if cpu_temp is not None:
             self.state['cpu_temp'] = cpu_temp
 
-        # GPU temp
         gpu_temp = self._read_jetson_temp('GPU')
         if gpu_temp is not None:
             self.state['gpu_temp'] = gpu_temp
 
-        # Battery — try common power_supply paths
         battery = self._read_battery()
         if battery is not None:
             self.state['battery'] = battery
@@ -172,12 +174,7 @@ class DashboardNode(Node):
         self._emit_state()
 
     def _read_jetson_temp(self, name: str):
-        """Read temperature from Jetson thermal zones by name.
-
-        Jetson Orin Nano exposes zones like:
-          /sys/class/thermal/thermal_zone*/type → 'CPU-therm', 'GPU-therm', etc.
-          /sys/class/thermal/thermal_zone*/temp → millidegrees C
-        """
+        """Read temperature from Jetson thermal zones by name."""
         try:
             for zone_dir in glob.glob('/sys/class/thermal/thermal_zone*'):
                 type_path = os.path.join(zone_dir, 'type')
@@ -189,7 +186,6 @@ class DashboardNode(Node):
                     temp_path = os.path.join(zone_dir, 'temp')
                     with open(temp_path) as f:
                         raw = int(f.read().strip())
-                    # Jetson reports millidegrees
                     temp = raw / 1000.0 if raw > 1000 else float(raw)
                     return round(temp, 1)
         except Exception:
@@ -197,19 +193,13 @@ class DashboardNode(Node):
         return None
 
     def _read_battery(self):
-        """Read battery capacity from power_supply sysfs.
-
-        JetAuto uses a LiPo with a fuel gauge. Common paths:
-          /sys/class/power_supply/battery/capacity
-          /sys/class/power_supply/BAT*/capacity
-        """
+        """Read battery capacity from power_supply sysfs."""
         try:
             for ps_dir in glob.glob('/sys/class/power_supply/*'):
                 cap_path = os.path.join(ps_dir, 'capacity')
                 type_path = os.path.join(ps_dir, 'type')
                 if not os.path.exists(cap_path):
                     continue
-                # Only read Battery type (not Mains/USB)
                 if os.path.exists(type_path):
                     with open(type_path) as f:
                         if f.read().strip() != 'Battery':
@@ -225,8 +215,73 @@ class DashboardNode(Node):
         try:
             self.socketio.emit('state', self.state)
         except AttributeError:
-            # socketio.server not initialized yet (early startup)
-            pass
+            pass  # socketio.server not initialized yet
+
+    # ── Process management (launch/kill voice & vision nodes) ──────
+
+    def _launch_voice(self):
+        """Launch the voice control pipeline via ros2 launch."""
+        if self._voice_proc is not None and self._voice_proc.poll() is None:
+            return  # already running
+        try:
+            self._voice_proc = subprocess.Popen(
+                ['ros2', 'launch', 'jetauto_voice', 'voice_control.launch.py',
+                 'mic_device_index:=1', 'vad_aggressiveness:=2'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid,
+            )
+            self.get_logger().info(f'Voice pipeline launched (pid {self._voice_proc.pid})')
+        except Exception as e:
+            self.get_logger().error(f'Failed to launch voice: {e}')
+
+    def _kill_voice(self):
+        """Kill the voice control pipeline."""
+        if self._voice_proc is not None and self._voice_proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(self._voice_proc.pid), signal.SIGTERM)
+                self._voice_proc.wait(timeout=5)
+            except Exception:
+                try:
+                    os.killpg(os.getpgid(self._voice_proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+            self.get_logger().info('Voice pipeline stopped')
+        self._voice_proc = None
+
+    def _launch_vision(self):
+        """Launch the vision detection pipeline via ros2 launch."""
+        if self._vision_proc is not None and self._vision_proc.poll() is None:
+            return  # already running
+        try:
+            self._vision_proc = subprocess.Popen(
+                ['ros2', 'launch', 'jetauto_vision', 'vision_launch.py'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid,
+            )
+            self.get_logger().info(f'Vision pipeline launched (pid {self._vision_proc.pid})')
+        except Exception as e:
+            self.get_logger().error(f'Failed to launch vision: {e}')
+
+    def _kill_vision(self):
+        """Kill the vision detection pipeline."""
+        if self._vision_proc is not None and self._vision_proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(self._vision_proc.pid), signal.SIGTERM)
+                self._vision_proc.wait(timeout=5)
+            except Exception:
+                try:
+                    os.killpg(os.getpgid(self._vision_proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+            self.get_logger().info('Vision pipeline stopped')
+        self._vision_proc = None
+
+    def cleanup_subprocesses(self):
+        """Kill any managed subprocesses on shutdown."""
+        self._kill_voice()
+        self._kill_vision()
 
     # ── Command handlers (from browser) ────────────────────────────
 
@@ -236,6 +291,12 @@ class DashboardNode(Node):
         self.pub_voice_enable.publish(msg)
         self.state['voice_enabled'] = enabled
         self._emit_state()
+
+        if enabled:
+            self._launch_voice()
+        else:
+            self._kill_voice()
+
         self.get_logger().info(f'Voice {"enabled" if enabled else "disabled"}')
 
     def toggle_vision(self, enabled: bool):
@@ -244,6 +305,12 @@ class DashboardNode(Node):
         self.pub_vision_enable.publish(msg)
         self.state['vision_enabled'] = enabled
         self._emit_state()
+
+        if enabled:
+            self._launch_vision()
+        else:
+            self._kill_vision()
+
         self.get_logger().info(f'Vision {"enabled" if enabled else "disabled"}')
 
     def request_shutdown(self):
@@ -252,12 +319,11 @@ class DashboardNode(Node):
         self.pub_shutdown.publish(msg)
         self.get_logger().warn('Shutdown requested from dashboard!')
 
-        # Actually shut down the machine after a brief delay
         shutdown_cmd = self.get_parameter('shutdown_command').value
         self.get_logger().warn(f'Executing: {shutdown_cmd}')
 
         def _do_shutdown():
-            time.sleep(2)  # give the UI a moment to show "shutting down"
+            time.sleep(2)
             try:
                 subprocess.run(shutdown_cmd.split(), check=True)
             except Exception as e:
@@ -276,7 +342,6 @@ class DashboardNode(Node):
 def create_app(node: DashboardNode):
     """Create Flask app with SocketIO and wire up the ROS2 node."""
     static_dir = os.path.join(os.path.dirname(__file__), '..', 'static')
-    # Fallback: check installed share path
     if not os.path.isdir(static_dir):
         try:
             from ament_index_python.packages import get_package_share_directory
@@ -323,13 +388,15 @@ def create_app(node: DashboardNode):
 
     @socketio.on('quit')
     def on_quit():
-        """Close the dashboard cleanly — kills server + ROS node."""
+        """Close the dashboard cleanly — kills everything and exits."""
         node.get_logger().info('Quit requested from dashboard UI')
-        import signal
-        # Give the browser a moment to close, then kill ourselves
+
         def _do_quit():
             time.sleep(0.5)
-            os.kill(os.getpid(), signal.SIGINT)
+            node.cleanup_subprocesses()
+            # Use os._exit to avoid rclpy spin thread errors
+            os._exit(0)
+
         threading.Thread(target=_do_quit, daemon=True).start()
 
     return app
@@ -338,7 +405,6 @@ def create_app(node: DashboardNode):
 def main(args=None):
     rclpy.init(args=args)
 
-    # Create SocketIO first, then node (node needs socketio ref)
     socketio = SocketIO(async_mode='threading', cors_allowed_origins='*')
     node = DashboardNode(socketio)
     app = create_app(node)
@@ -347,7 +413,6 @@ def main(args=None):
     host = node.get_parameter('host').value
     port = node.get_parameter('port').value
 
-    # Run ROS2 spin in a background thread
     ros_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     ros_thread.start()
 
@@ -358,8 +423,12 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        node.cleanup_subprocesses()
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':

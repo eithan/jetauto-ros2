@@ -4,7 +4,8 @@ dashboard_node:
     host: "0.0.0.0"
     robot_name: "JARVIS"
     # How often to read CPU/GPU temps and battery from sysfs (seconds)
-    system_monitor_interval: 30.0
+    # Reads once immediately at startup, then every interval
+    system_monitor_interval: 180.0
     # Command to run when shutdown is confirmed from the UI
     # Requires passwordless sudo for the ubuntu user (default on Jetson)
     shutdown_command: "sudo /sbin/poweroff"
