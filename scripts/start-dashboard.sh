@@ -68,7 +68,18 @@ ROS_PID=$!
     sleep 1
   done
 
-  # Detect display server
+  # Auto-detect display if not set (e.g. running via SSH or systemd)
+  if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    # Try common Jetson display values
+    for d in :1 :0; do
+      if DISPLAY="$d" xdpyinfo >/dev/null 2>&1; then
+        export DISPLAY="$d"
+        echo "📺 Found display at DISPLAY=$d"
+        break
+      fi
+    done
+  fi
+
   if [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
     if [ "$KIOSK" = true ]; then
       # Fullscreen kiosk — no address bar, no window chrome
