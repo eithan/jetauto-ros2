@@ -9,18 +9,18 @@
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
-  --bg: #0a0a0f;
-  --bg-card: rgba(15, 20, 30, 0.85);
-  --border: rgba(0, 212, 255, 0.15);
-  --cyan: #00d4ff;
-  --cyan-dim: rgba(0, 212, 255, 0.3);
-  --cyan-glow: rgba(0, 212, 255, 0.15);
-  --amber: #f59e0b;
-  --red: #ef4444;
-  --green: #22c55e;
-  --text: #e2e8f0;
-  --text-dim: #64748b;
-  --face-outline: rgba(0, 212, 255, 0.6);
+  --bg: #0d1117;
+  --bg-card: rgba(22, 30, 44, 0.9);
+  --border: rgba(0, 212, 255, 0.25);
+  --cyan: #33ddff;
+  --cyan-dim: rgba(51, 221, 255, 0.4);
+  --cyan-glow: rgba(51, 221, 255, 0.2);
+  --amber: #fbbf24;
+  --red: #f87171;
+  --green: #4ade80;
+  --text: #f1f5f9;
+  --text-dim: #94a3b8;
+  --face-outline: rgba(51, 221, 255, 0.7);
 }
 
 html, body {
@@ -239,8 +239,8 @@ html, body {
 }
 
 .stat-card {
-  background: rgba(10, 15, 25, 0.6);
-  border: 1px solid rgba(0, 212, 255, 0.08);
+  background: rgba(20, 30, 48, 0.7);
+  border: 1px solid rgba(51, 221, 255, 0.15);
   border-radius: 12px;
   padding: 16px;
   display: flex;
@@ -264,7 +264,7 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 
-.stat-value.na { color: var(--text-dim); font-size: 18px; }
+.stat-value.na { color: var(--text-dim); font-size: 20px; }
 
 /* Status dot */
 .status-dot {
@@ -282,7 +282,7 @@ html, body {
 .battery-bar-container {
   width: 100%;
   height: 8px;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.1);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -299,8 +299,8 @@ html, body {
 /* Detection log */
 .detection-log {
   grid-column: 1 / -1;
-  background: rgba(10, 15, 25, 0.6);
-  border: 1px solid rgba(0, 212, 255, 0.08);
+  background: rgba(20, 30, 48, 0.7);
+  border: 1px solid rgba(51, 221, 255, 0.15);
   border-radius: 12px;
   padding: 16px;
   min-height: 0;
@@ -323,7 +323,7 @@ html, body {
   justify-content: space-between;
   padding: 4px 8px;
   border-radius: 6px;
-  background: rgba(0, 212, 255, 0.03);
+  background: rgba(51, 221, 255, 0.06);
   animation: fade-in 0.3s ease;
 }
 
@@ -376,12 +376,12 @@ html, body {
 .toggle-switch {
   width: 52px;
   height: 28px;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.15);
   border-radius: 14px;
   cursor: pointer;
   position: relative;
   transition: background 0.3s ease, box-shadow 0.3s ease;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 .toggle-switch::after {
@@ -448,6 +448,32 @@ html, body {
   50% { box-shadow: 0 0 25px rgba(239, 68, 68, 0.6); }
 }
 
+/* Close button */
+.close-btn {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  transition: all 0.2s ease;
+  line-height: 1;
+}
+.close-btn:hover {
+  background: rgba(248, 113, 113, 0.2);
+  border-color: var(--red);
+  color: var(--red);
+}
+
 /* Connection status */
 .conn-status {
   position: fixed;
@@ -481,6 +507,8 @@ html, body {
 </style>
 </head>
 <body>
+
+<button class="close-btn" onclick="closeDashboard()" title="Close dashboard">✕</button>
 
 <div class="conn-status">
   <span class="status-dot" id="connDot"></span>
@@ -834,6 +862,19 @@ function handleShutdown() {
     socket.emit('shutdown');
   }
 }
+
+// ── Close dashboard ───────────────────────────────────
+function closeDashboard() {
+  // Try to close the window (works in kiosk mode)
+  window.close();
+  // Fallback: navigate to blank if close is blocked
+  setTimeout(() => { window.location.href = 'about:blank'; }, 200);
+}
+
+// Also support Escape key to exit
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeDashboard();
+});
 
 // ── Mouth animation (JS-driven for compatibility) ─────
 
