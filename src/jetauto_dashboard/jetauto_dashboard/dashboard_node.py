@@ -222,7 +222,11 @@ class DashboardNode(Node):
 
     def _emit_state(self):
         """Push current state to all connected browsers."""
-        self.socketio.emit('state', self.state)
+        try:
+            self.socketio.emit('state', self.state)
+        except AttributeError:
+            # socketio.server not initialized yet (early startup)
+            pass
 
     # ── Command handlers (from browser) ────────────────────────────
 
