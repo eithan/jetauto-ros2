@@ -88,15 +88,25 @@ ROS_PID=$!
   fi
 
   if [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
-    if [ "$KIOSK" = true ]; then
-      # Fullscreen kiosk — no address bar, no window chrome
-      chromium-browser --noerrdialogs --disable-infobars --disable-session-crashed-bubble \
-        --kiosk "${DASHBOARD_URL}" 2>/dev/null &
+    # Find a working browser
+    BROWSER=""
+    for candidate in chromium-browser chromium google-chrome firefox; do
+      if command -v "$candidate" >/dev/null 2>&1; then
+        BROWSER="$candidate"
+        break
+      fi
+    done
+
+    if [ -z "$BROWSER" ]; then
+      echo "⚠️  No browser found — dashboard running at ${DASHBOARD_URL}"
+    elif [ "$KIOSK" = true ]; then
+      "$BROWSER" --noerrdialogs --disable-infobars --disable-session-crashed-bubble \
+        --no-first-run --disable-translate --kiosk "${DASHBOARD_URL}" 2>/dev/null &
+      echo "🌐 ${BROWSER} opened in kiosk mode"
     else
-      # Normal window, maximized
-      chromium-browser --start-maximized "${DASHBOARD_URL}" 2>/dev/null &
+      "$BROWSER" --start-maximized --no-first-run "${DASHBOARD_URL}" 2>/dev/null &
+      echo "🌐 ${BROWSER} opened"
     fi
-    echo "🌐 Browser opened"
   else
     echo "⚠️  No display detected — dashboard running headless at ${DASHBOARD_URL}"
   fi
@@ -107,9 +117,9 @@ cleanup() {
   echo ""
   echo "🛑 Shutting down dashboard..."
   kill "$ROS_PID" 2>/dev/null
-  # Kill chromium kiosk if we started it
-  if [ "$KIOSK" = true ]; then
-    pkill -f "chromium.*kiosk.*${DASHBOARD_PORT}" 2>/dev/null || true
+  # Kill browser kiosk if we started it
+  if [ "$KIOSK" = true ] && [ -n "${BROWSER:-}" ]; then
+    pkill -f "${BROWSER}.*kiosk.*${DASHBOARD_PORT}" 2>/dev/null || true
   fi
   wait
 }
