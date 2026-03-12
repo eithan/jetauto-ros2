@@ -45,6 +45,13 @@ if [ "$BUILD" = true ]; then
   echo "✅ Build complete"
 fi
 
+# ── Kill leftover dashboard if port is in use ─────────
+if lsof -ti:${DASHBOARD_PORT} >/dev/null 2>&1; then
+  echo "🧹 Port ${DASHBOARD_PORT} in use — killing leftover process..."
+  kill $(lsof -ti:${DASHBOARD_PORT}) 2>/dev/null || true
+  sleep 1
+fi
+
 # ── Check dependencies ────────────────────────────────
 python3 -c "import flask, flask_socketio" 2>/dev/null || {
   echo "📦 Installing Python dependencies..."
