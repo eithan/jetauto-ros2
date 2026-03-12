@@ -321,6 +321,17 @@ def create_app(node: DashboardNode):
     def on_request_state():
         socketio.emit('state', node.state)
 
+    @socketio.on('quit')
+    def on_quit():
+        """Close the dashboard cleanly — kills server + ROS node."""
+        node.get_logger().info('Quit requested from dashboard UI')
+        import signal
+        # Give the browser a moment to close, then kill ourselves
+        def _do_quit():
+            time.sleep(0.5)
+            os.kill(os.getpid(), signal.SIGINT)
+        threading.Thread(target=_do_quit, daemon=True).start()
+
     return app
 
 
