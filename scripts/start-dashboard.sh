@@ -10,7 +10,7 @@
 # For autostart on boot, add a systemd service (see below).
 # ─────────────────────────────────────────────────────────
 
-set -euo pipefail
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WS_DIR="${SCRIPT_DIR}/../.."          # ~/ros2_ws
