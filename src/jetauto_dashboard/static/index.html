@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JARVIS Control Panel</title>
+<style>
+/* ── Reset & Base ──────────────────────────────────────── */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-card: rgba(15, 20, 30, 0.85);
+  --border: rgba(0, 212, 255, 0.15);
+  --cyan: #00d4ff;
+  --cyan-dim: rgba(0, 212, 255, 0.3);
+  --cyan-glow: rgba(0, 212, 255, 0.15);
+  --amber: #f59e0b;
+  --red: #ef4444;
+  --green: #22c55e;
+  --text: #e2e8f0;
+  --text-dim: #64748b;
+  --face-outline: rgba(0, 212, 255, 0.6);
+}
+
+html, body {
+  width: 100%; height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ── Layout ────────────────────────────────────────────── */
+.dashboard {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  height: 100vh;
+  padding: 24px;
+  gap: 20px;
+}
+
+.main-area {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  min-height: 0;
+}
+
+/* ── Cards ─────────────────────────────────────────────── */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  backdrop-filter: blur(12px);
+  position: relative;
+  overflow: hidden;
+}
+
+/* ── Face Panel ────────────────────────────────────────── */
+.face-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.face-panel .robot-name {
+  font-size: 14px;
+  letter-spacing: 6px;
+  color: var(--cyan);
+  text-transform: uppercase;
+  margin-bottom: 12px;
+  opacity: 0.8;
+}
+
+.face-container {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  aspect-ratio: 1;
+}
+
+/* Scan-line overlay */
+.face-container::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 212, 255, 0.03) 2px,
+    rgba(0, 212, 255, 0.03) 4px
+  );
+  pointer-events: none;
+  border-radius: 50%;
+  z-index: 2;
+}
+
+.face-svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Face outline circle glow */
+.face-outline {
+  fill: none;
+  stroke: var(--face-outline);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 15px rgba(0, 212, 255, 0.2));
+  transition: all 0.6s ease;
+}
+
+.face-outline.listening {
+  stroke: var(--cyan);
+  filter: drop-shadow(0 0 25px rgba(0, 212, 255, 0.5));
+  animation: pulse-outline 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-outline {
+  0%, 100% { stroke-width: 1.5; }
+  50% { stroke-width: 2.5; }
+}
+
+/* Eyes */
+.eye-group {
+  transition: transform 0.3s ease;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.eye-white {
+  fill: rgba(255, 255, 255, 0.95);
+  transition: all 0.4s ease;
+}
+
+.eye-iris {
+  fill: var(--cyan);
+  transition: all 0.4s ease;
+}
+
+.eye-pupil {
+  fill: #0a0a0f;
+  transition: all 0.4s ease;
+}
+
+.eye-highlight {
+  fill: rgba(255, 255, 255, 0.8);
+}
+
+/* Blink animation */
+@keyframes blink {
+  0%, 42%, 44%, 100% { transform: scaleY(1); }
+  43% { transform: scaleY(0.05); }
+}
+
+.eye-group.idle {
+  animation: blink 4s ease-in-out infinite;
+  transform-origin: center;
+}
+
+/* Listening — wide eyes */
+.eye-group.listening .eye-white { transform: scale(1.1); }
+.eye-group.listening .eye-iris { transform: scale(1.15); }
+.eye-group.listening .eye-pupil { transform: scale(1.2); }
+
+/* Processing — pupils scan side to side */
+@keyframes think-scan {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(6px); }
+  75% { transform: translateX(-6px); }
+}
+.eye-group.processing .eye-iris { animation: think-scan 1.2s ease-in-out infinite; }
+.eye-group.processing .eye-pupil { animation: think-scan 1.2s ease-in-out infinite; }
+
+/* Mouth */
+.mouth-path {
+  fill: none;
+  stroke: var(--cyan);
+  stroke-width: 2;
+  stroke-linecap: round;
+  transition: all 0.4s ease;
+  filter: drop-shadow(0 0 6px rgba(0, 212, 255, 0.3));
+}
+
+/* Mouth states are driven by JS (setAttribute on path d) for compatibility */
+.mouth-path.listening { stroke-width: 2.5; }
+.mouth-path.speaking { stroke-width: 2.5; }
+
+/* Voice state label */
+.voice-state-label {
+  margin-top: 16px;
+  font-size: 12px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  transition: color 0.3s;
+}
+.voice-state-label.listening { color: var(--cyan); }
+.voice-state-label.processing { color: var(--amber); }
+.voice-state-label.speaking { color: var(--green); }
+
+/* ── Status Panel ──────────────────────────────────────── */
+.status-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.status-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.clock {
+  font-size: 28px;
+  font-weight: 300;
+  color: var(--text);
+  letter-spacing: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.clock-date {
+  font-size: 12px;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  flex: 1;
+}
+
+.stat-card {
+  background: rgba(10, 15, 25, 0.6);
+  border: 1px solid rgba(0, 212, 255, 0.08);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stat-label {
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stat-value {
+  font-size: 24px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-value.na { color: var(--text-dim); font-size: 18px; }
+
+/* Status dot */
+.status-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--text-dim);
+  transition: background 0.3s;
+}
+.status-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.status-dot.warning { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+.status-dot.error { background: var(--red); box-shadow: 0 0 6px var(--red); }
+
+/* Battery bar */
+.battery-bar-container {
+  width: 100%;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.battery-bar {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.8s ease, background 0.5s ease;
+  background: var(--green);
+}
+.battery-bar.medium { background: var(--amber); }
+.battery-bar.low { background: var(--red); }
+
+/* Detection log */
+.detection-log {
+  grid-column: 1 / -1;
+  background: rgba(10, 15, 25, 0.6);
+  border: 1px solid rgba(0, 212, 255, 0.08);
+  border-radius: 12px;
+  padding: 16px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.detection-log .stat-label { margin-bottom: 8px; }
+
+.detection-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.detection-item {
+  font-size: 13px;
+  color: var(--text-dim);
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(0, 212, 255, 0.03);
+  animation: fade-in 0.3s ease;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.detection-item .det-label { color: var(--text); font-weight: 500; }
+.detection-item .det-conf { color: var(--cyan); }
+.detection-item .det-time { color: var(--text-dim); font-size: 11px; }
+
+.detection-empty {
+  font-size: 13px;
+  color: var(--text-dim);
+  font-style: italic;
+  opacity: 0.5;
+}
+
+/* ── Controls Bar ──────────────────────────────────────── */
+.controls-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 16px 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  backdrop-filter: blur(12px);
+}
+
+/* Toggle button */
+.toggle-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.toggle-label {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  transition: color 0.3s;
+}
+.toggle-group.active .toggle-label { color: var(--text); }
+
+.toggle-switch {
+  width: 52px;
+  height: 28px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.toggle-switch::after {
+  content: '';
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 20px; height: 20px;
+  background: var(--text-dim);
+  border-radius: 50%;
+  transition: transform 0.3s ease, background 0.3s ease;
+}
+
+.toggle-switch.on {
+  background: rgba(0, 212, 255, 0.2);
+  border-color: var(--cyan);
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.2);
+}
+
+.toggle-switch.on::after {
+  transform: translateX(24px);
+  background: var(--cyan);
+  box-shadow: 0 0 8px var(--cyan);
+}
+
+/* Separator */
+.control-sep {
+  width: 1px;
+  height: 28px;
+  background: var(--border);
+}
+
+/* Shutdown button */
+.shutdown-btn {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 12px;
+  padding: 10px 24px;
+  color: var(--red);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.shutdown-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: var(--red);
+  box-shadow: 0 0 15px rgba(239, 68, 68, 0.2);
+}
+
+.shutdown-btn.confirm {
+  background: var(--red);
+  color: white;
+  animation: pulse-red 0.8s ease-in-out infinite;
+}
+
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.3); }
+  50% { box-shadow: 0 0 25px rgba(239, 68, 68, 0.6); }
+}
+
+/* Connection status */
+.conn-status {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0.6;
+  z-index: 10;
+}
+
+/* ── Responsive ────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .main-area { grid-template-columns: 1fr; }
+  .face-container { max-width: 280px; }
+  .status-grid { grid-template-columns: 1fr; }
+  .controls-bar { flex-wrap: wrap; }
+}
+
+@media (max-height: 600px) {
+  .dashboard { padding: 12px; gap: 10px; }
+  .card { padding: 12px; }
+  .face-container { max-width: 200px; }
+  .clock { font-size: 20px; }
+}
+</style>
+</head>
+<body>
+
+<div class="conn-status">
+  <span class="status-dot" id="connDot"></span>
+  <span id="connLabel">connecting</span>
+</div>
+
+<div class="dashboard">
+  <!-- Main area: face + status -->
+  <div class="main-area">
+    <!-- Face panel -->
+    <div class="card face-panel">
+      <div class="robot-name" id="robotName">JARVIS</div>
+      <div class="face-container">
+        <svg class="face-svg" viewBox="0 0 300 300">
+          <!-- Face outline -->
+          <circle class="face-outline" id="faceOutline" cx="150" cy="150" r="140"/>
+
+          <!-- Left eye -->
+          <g class="eye-group" id="leftEye" transform="translate(0,0)">
+            <ellipse class="eye-white" cx="110" cy="130" rx="22" ry="18"/>
+            <circle class="eye-iris" cx="110" cy="130" r="11"/>
+            <circle class="eye-pupil" cx="110" cy="130" r="6"/>
+            <circle class="eye-highlight" cx="105" cy="125" r="3"/>
+          </g>
+
+          <!-- Right eye -->
+          <g class="eye-group" id="rightEye" transform="translate(0,0)">
+            <ellipse class="eye-white" cx="190" cy="130" rx="22" ry="18"/>
+            <circle class="eye-iris" cx="190" cy="130" r="11"/>
+            <circle class="eye-pupil" cx="190" cy="130" r="6"/>
+            <circle class="eye-highlight" cx="185" cy="125" r="3"/>
+          </g>
+
+          <!-- Mouth -->
+          <path class="mouth-path idle" id="mouth" d="M 120,195 Q 150,210 180,195"/>
+
+          <!-- Processing indicator dots -->
+          <g id="processingDots" style="opacity: 0; transition: opacity 0.3s;">
+            <circle cx="138" cy="230" r="3" fill="var(--amber)">
+              <animate attributeName="opacity" values="0.3;1;0.3" dur="1s" begin="0s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="150" cy="230" r="3" fill="var(--amber)">
+              <animate attributeName="opacity" values="0.3;1;0.3" dur="1s" begin="0.2s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="162" cy="230" r="3" fill="var(--amber)">
+              <animate attributeName="opacity" values="0.3;1;0.3" dur="1s" begin="0.4s" repeatCount="indefinite"/>
+            </circle>
+          </g>
+        </svg>
+      </div>
+      <div class="voice-state-label" id="voiceStateLabel">idle</div>
+    </div>
+
+    <!-- Status panel -->
+    <div class="card status-panel">
+      <div class="status-header">
+        <div>
+          <div class="clock" id="clock">--:--:--</div>
+          <div class="clock-date" id="clockDate"></div>
+        </div>
+      </div>
+
+      <div class="status-grid">
+        <!-- Battery -->
+        <div class="stat-card">
+          <div class="stat-label">
+            <span class="status-dot" id="batteryDot"></span>
+            🔋 Battery
+          </div>
+          <div class="stat-value" id="batteryValue">N/A</div>
+          <div class="battery-bar-container">
+            <div class="battery-bar" id="batteryBar" style="width: 0%"></div>
+          </div>
+        </div>
+
+        <!-- Uptime -->
+        <div class="stat-card">
+          <div class="stat-label">
+            <span class="status-dot connected"></span>
+            ⏱ Uptime
+          </div>
+          <div class="stat-value" id="uptimeValue">0:00:00</div>
+        </div>
+
+        <!-- CPU Temp -->
+        <div class="stat-card">
+          <div class="stat-label">
+            <span class="status-dot" id="cpuDot"></span>
+            🌡 CPU Temp
+          </div>
+          <div class="stat-value" id="cpuTempValue">N/A</div>
+        </div>
+
+        <!-- GPU Temp -->
+        <div class="stat-card">
+          <div class="stat-label">
+            <span class="status-dot" id="gpuDot"></span>
+            🎮 GPU Temp
+          </div>
+          <div class="stat-value" id="gpuTempValue">N/A</div>
+        </div>
+
+        <!-- Detection log -->
+        <div class="detection-log">
+          <div class="stat-label">
+            <span class="status-dot" id="detDot"></span>
+            👁 Detection Log
+          </div>
+          <ul class="detection-list" id="detectionList">
+            <li class="detection-empty">No detections yet</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controls bar -->
+  <div class="controls-bar">
+    <div class="toggle-group" id="voiceGroup">
+      <span class="toggle-label">🎤 Voice</span>
+      <div class="toggle-switch" id="voiceToggle" onclick="toggleVoice()"></div>
+    </div>
+
+    <div class="control-sep"></div>
+
+    <div class="toggle-group" id="visionGroup">
+      <span class="toggle-label">👁 Vision</span>
+      <div class="toggle-switch" id="visionToggle" onclick="toggleVision()"></div>
+    </div>
+
+    <div class="control-sep"></div>
+
+    <button class="shutdown-btn" id="shutdownBtn" onclick="handleShutdown()">
+      <span>⏻</span> Shutdown
+    </button>
+  </div>
+</div>
+
+<!-- SocketIO -->
+<script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+<script>
+// ── State ─────────────────────────────────────────────
+let voiceEnabled = false;
+let visionEnabled = false;
+let shutdownPending = false;
+let shutdownTimer = null;
+
+// ── Socket connection ─────────────────────────────────
+const socket = io({ reconnection: true, reconnectionDelay: 1000 });
+
+socket.on('connect', () => {
+  document.getElementById('connDot').className = 'status-dot connected';
+  document.getElementById('connLabel').textContent = 'connected';
+  socket.emit('request_state');
+});
+
+socket.on('disconnect', () => {
+  document.getElementById('connDot').className = 'status-dot error';
+  document.getElementById('connLabel').textContent = 'disconnected';
+});
+
+socket.on('config', (cfg) => {
+  if (cfg.robot_name) {
+    document.getElementById('robotName').textContent = cfg.robot_name;
+    document.title = cfg.robot_name + ' Control Panel';
+  }
+});
+
+socket.on('state', (s) => {
+  updateBattery(s.battery);
+  updateTemps(s.cpu_temp, s.gpu_temp);
+  updateUptime(s.uptime);
+  updateVoiceState(s.voice_state);
+  updateDetections(s.detections);
+
+  // Sync toggles
+  voiceEnabled = s.voice_enabled;
+  visionEnabled = s.vision_enabled;
+  syncToggles();
+});
+
+// ── UI Updates ────────────────────────────────────────
+
+function updateBattery(val) {
+  const el = document.getElementById('batteryValue');
+  const bar = document.getElementById('batteryBar');
+  const dot = document.getElementById('batteryDot');
+
+  if (val === null || val === undefined) {
+    el.textContent = 'N/A';
+    el.className = 'stat-value na';
+    bar.style.width = '0%';
+    dot.className = 'status-dot';
+    return;
+  }
+
+  el.textContent = val.toFixed(0) + '%';
+  el.className = 'stat-value';
+  bar.style.width = Math.min(100, Math.max(0, val)) + '%';
+
+  if (val > 50) {
+    bar.className = 'battery-bar';
+    dot.className = 'status-dot connected';
+  } else if (val > 20) {
+    bar.className = 'battery-bar medium';
+    dot.className = 'status-dot warning';
+  } else {
+    bar.className = 'battery-bar low';
+    dot.className = 'status-dot error';
+  }
+}
+
+function updateTemps(cpu, gpu) {
+  updateTemp('cpuTempValue', 'cpuDot', cpu);
+  updateTemp('gpuTempValue', 'gpuDot', gpu);
+}
+
+function updateTemp(elId, dotId, val) {
+  const el = document.getElementById(elId);
+  const dot = document.getElementById(dotId);
+
+  if (val === null || val === undefined) {
+    el.textContent = 'N/A';
+    el.className = 'stat-value na';
+    dot.className = 'status-dot';
+    return;
+  }
+
+  el.textContent = val.toFixed(0) + '°C';
+  el.className = 'stat-value';
+
+  if (val < 60) {
+    dot.className = 'status-dot connected';
+    el.style.color = '';
+  } else if (val < 80) {
+    dot.className = 'status-dot warning';
+    el.style.color = 'var(--amber)';
+  } else {
+    dot.className = 'status-dot error';
+    el.style.color = 'var(--red)';
+  }
+}
+
+function updateUptime(seconds) {
+  if (!seconds && seconds !== 0) return;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  document.getElementById('uptimeValue').textContent =
+    `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function updateVoiceState(state) {
+  if (!state) state = 'idle';
+
+  const label = document.getElementById('voiceStateLabel');
+  const outline = document.getElementById('faceOutline');
+  const leftEye = document.getElementById('leftEye');
+  const rightEye = document.getElementById('rightEye');
+  const mouth = document.getElementById('mouth');
+  const dots = document.getElementById('processingDots');
+
+  // Clear all state classes
+  label.className = 'voice-state-label';
+  outline.className = 'face-outline';
+  leftEye.className = 'eye-group';
+  rightEye.className = 'eye-group';
+  mouth.className = 'mouth-path';
+  dots.style.opacity = '0';
+
+  // Apply new state
+  label.textContent = state;
+  label.classList.add(state);
+  outline.classList.add(state);
+  leftEye.classList.add(state);
+  rightEye.classList.add(state);
+  mouth.classList.add(state);
+
+  if (state === 'processing') {
+    dots.style.opacity = '1';
+  }
+
+  // Drive mouth via JS
+  setMouthState(state);
+}
+
+function updateDetections(dets) {
+  const list = document.getElementById('detectionList');
+  const dot = document.getElementById('detDot');
+
+  if (!dets || dets.length === 0) {
+    list.innerHTML = '<li class="detection-empty">No detections yet</li>';
+    dot.className = 'status-dot';
+    return;
+  }
+
+  dot.className = 'status-dot connected';
+  list.innerHTML = dets.map(d =>
+    `<li class="detection-item">
+      <span class="det-label">${d.label}</span>
+      <span class="det-conf">${(d.confidence * 100).toFixed(0)}%</span>
+      <span class="det-time">${d.time}</span>
+    </li>`
+  ).join('');
+}
+
+function syncToggles() {
+  const vt = document.getElementById('voiceToggle');
+  const vg = document.getElementById('voiceGroup');
+  vt.className = 'toggle-switch' + (voiceEnabled ? ' on' : '');
+  vg.className = 'toggle-group' + (voiceEnabled ? ' active' : '');
+
+  const vit = document.getElementById('visionToggle');
+  const vig = document.getElementById('visionGroup');
+  vit.className = 'toggle-switch' + (visionEnabled ? ' on' : '');
+  vig.className = 'toggle-group' + (visionEnabled ? ' active' : '');
+}
+
+// ── Controls ──────────────────────────────────────────
+
+function toggleVoice() {
+  voiceEnabled = !voiceEnabled;
+  syncToggles();
+  socket.emit('toggle_voice', { enabled: voiceEnabled });
+}
+
+function toggleVision() {
+  visionEnabled = !visionEnabled;
+  syncToggles();
+  socket.emit('toggle_vision', { enabled: visionEnabled });
+}
+
+function handleShutdown() {
+  const btn = document.getElementById('shutdownBtn');
+
+  if (!shutdownPending) {
+    shutdownPending = true;
+    btn.className = 'shutdown-btn confirm';
+    btn.innerHTML = '<span>⚠</span> Are you sure?';
+    shutdownTimer = setTimeout(() => {
+      shutdownPending = false;
+      btn.className = 'shutdown-btn';
+      btn.innerHTML = '<span>⏻</span> Shutdown';
+    }, 4000);
+  } else {
+    clearTimeout(shutdownTimer);
+    shutdownPending = false;
+    btn.className = 'shutdown-btn';
+    btn.innerHTML = '<span>⏻</span> Shutting down...';
+    btn.style.pointerEvents = 'none';
+    socket.emit('shutdown');
+  }
+}
+
+// ── Mouth animation (JS-driven for compatibility) ─────
+
+const MOUTH_PATHS = {
+  idle:       "M 120,195 Q 150,210 180,195",
+  listening:  "M 125,195 Q 150,208 175,195",
+  processing: "M 130,198 Q 150,200 170,198",
+  speaking: [
+    "M 125,192 Q 150,215 175,192",
+    "M 128,195 Q 150,205 172,195",
+    "M 122,190 Q 150,220 178,190",
+    "M 130,195 Q 150,202 170,195",
+    "M 124,192 Q 150,218 176,192",
+    "M 128,195 Q 150,208 172,195",
+  ],
+};
+
+let speakAnimFrame = 0;
+let speakAnimInterval = null;
+let currentMouthState = 'idle';
+
+function setMouthState(state) {
+  const mouth = document.getElementById('mouth');
+  if (currentMouthState === state) return;
+  currentMouthState = state;
+
+  // Stop speaking animation
+  if (speakAnimInterval) {
+    clearInterval(speakAnimInterval);
+    speakAnimInterval = null;
+  }
+
+  if (state === 'speaking') {
+    speakAnimFrame = 0;
+    speakAnimInterval = setInterval(() => {
+      const paths = MOUTH_PATHS.speaking;
+      mouth.setAttribute('d', paths[speakAnimFrame % paths.length]);
+      speakAnimFrame++;
+    }, 100);
+  } else {
+    const path = MOUTH_PATHS[state] || MOUTH_PATHS.idle;
+    mouth.setAttribute('d', path);
+  }
+}
+
+// ── Clock ─────────────────────────────────────────────
+
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    now.toLocaleTimeString('en-US', { hour12: false });
+  document.getElementById('clockDate').textContent =
+    now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+}
+
+setInterval(updateClock, 1000);
+updateClock();
+</script>
+</body>
+</html>
