@@ -264,7 +264,7 @@ class DashboardNode(Node):
         self._voice_proc = None
 
     def _launch_vision(self):
-        """Launch the vision detection pipeline via ros2 launch."""
+        """Launch the vision+TTS pipeline and enable detection."""
         if self._vision_proc is not None and self._vision_proc.poll() is None:
             return  # already running
         try:
@@ -273,6 +273,17 @@ class DashboardNode(Node):
                 preexec_fn=os.setsid,
             )
             self.get_logger().info(f'Vision pipeline launched (pid {self._vision_proc.pid})')
+
+            # detector_node starts with detection disabled (start_enabled=False)
+            # Send enable after a delay to let the node activate
+            def _enable_after_launch():
+                time.sleep(8)  # wait for YOLO model to load + lifecycle activate
+                msg = Bool()
+                msg.data = True
+                self.pub_vision_enable.publish(msg)
+                self.get_logger().info('Detection enabled after vision launch')
+            threading.Thread(target=_enable_after_launch, daemon=True).start()
+
         except Exception as e:
             self.get_logger().error(f'Failed to launch vision: {e}')
 
