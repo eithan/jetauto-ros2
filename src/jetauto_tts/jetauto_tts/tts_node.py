@@ -16,6 +16,7 @@ import time
 
 import rclpy
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_msgs.msg import Bool, String
 
 from jetauto_msgs.msg import DetectedObjectArray
@@ -88,8 +89,15 @@ class TTSNode(LifecycleNode):
         )
         # Publish speaking state so the voice commander can mute the mic
         self._speaking_pub = self.create_publisher(Bool, '/tts/speaking', 1)
-        # Publish voice state so the dashboard face animates during TTS
-        self._voice_state_pub = self.create_publisher(String, '/jetauto/voice/state', 1)
+        # Publish voice state so the dashboard face animates during TTS.
+        # TRANSIENT_LOCAL: late-joining subscribers (dashboard) get the last
+        # value, which prevents losing the very first 'speaking' publish.
+        _qos_latched = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            depth=1,
+        )
+        self._voice_state_pub = self.create_publisher(String, '/jetauto/voice/state', _qos_latched)
         self.get_logger().info('Activated — listening for detections')
         return super().on_activate(state)
 

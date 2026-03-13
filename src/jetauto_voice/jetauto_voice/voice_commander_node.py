@@ -36,6 +36,7 @@ os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_msgs.msg import Bool, String
 
 from jetauto_voice.intent_mapper import (
@@ -99,7 +100,14 @@ class VoiceCommanderNode(Node):
         self._detection_pub = self.create_publisher(Bool, "/jetauto/detection/enable", 1)
         self._target_pub = self.create_publisher(String, "/jetauto/detection/target", 1)
         self._tts_pub = self.create_publisher(String, "/tts/speak", 1)
-        self._voice_state_pub = self.create_publisher(String, "/jetauto/voice/state", 1)
+        # TRANSIENT_LOCAL matches the dashboard subscriber — ensures the first
+        # state publish is never lost due to DDS discovery timing.
+        _qos_latched = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            depth=1,
+        )
+        self._voice_state_pub = self.create_publisher(String, "/jetauto/voice/state", _qos_latched)
 
         # -- State --
         self._shutdown_event = threading.Event()

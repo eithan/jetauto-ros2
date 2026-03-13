@@ -508,11 +508,11 @@ html, body {
           <rect class="robot-bar" id="robotBar9"  x="183" width="5" y="205" height="14" rx="2"/>
           <rect class="robot-bar" id="robotBar10" x="193" width="5" y="205" height="14" rx="2"/>
 
-          <!-- Processing scan line -->
+          <!-- Processing scan line (constrained to visor/eye bounds: y=97–133) -->
           <g id="robotScanLine" style="opacity:0; transition: opacity 0.3s;">
-            <rect x="78" y="128" width="144" height="4" rx="2" fill="rgba(251,191,36,0.6)">
+            <rect x="78" y="113" width="144" height="4" rx="2" fill="rgba(251,191,36,0.6)">
               <animateTransform attributeName="transform" type="translate"
-                                values="0,-30;0,30;0,-30" dur="1.2s" repeatCount="indefinite"/>
+                                values="0,-20;0,20;0,-20" dur="1.2s" repeatCount="indefinite"/>
             </rect>
           </g>
         </svg>
@@ -609,21 +609,36 @@ let shutdownTimer = null;
 
 // ── Startup overlay ───────────────────────────────────
 let _startupMode = null;
-let _startupTimeout = null;
+let _startupShownAt = 0;
+let _startupHideTimer = null;
 
 function showStartupOverlay(mode) {
   _startupMode = mode;
+  _startupShownAt = Date.now();
   document.getElementById('startupMsg').textContent =
     mode === 'voice' ? 'Starting voice pipeline...' : 'Starting vision pipeline...';
   document.getElementById('startupOverlay').style.display = 'flex';
-  clearTimeout(_startupTimeout);
-  _startupTimeout = setTimeout(hideStartupOverlay, 45000);
+  // Safety: always hide after 60s no matter what
+  clearTimeout(_startupHideTimer);
+  _startupHideTimer = setTimeout(_doHideOverlay, 60000);
 }
 
-function hideStartupOverlay() {
+function _doHideOverlay() {
   _startupMode = null;
-  clearTimeout(_startupTimeout);
+  clearTimeout(_startupHideTimer);
   document.getElementById('startupOverlay').style.display = 'none';
+}
+
+function hideStartupOverlay(minDisplayMs) {
+  if (!_startupMode) return;
+  const elapsed = Date.now() - _startupShownAt;
+  const wait = minDisplayMs ? Math.max(0, minDisplayMs - elapsed) : 0;
+  clearTimeout(_startupHideTimer);
+  if (wait > 0) {
+    _startupHideTimer = setTimeout(_doHideOverlay, wait);
+  } else {
+    _doHideOverlay();
+  }
 }
 
 // ── Socket ────────────────────────────────────────────
@@ -657,8 +672,16 @@ socket.on('state', (s) => {
   voiceEnabled  = s.voice_enabled;
   visionEnabled = s.vision_enabled;
   syncToggles();
-  if (_startupMode === 'voice'  && s.voice_enabled)  hideStartupOverlay();
-  if (_startupMode === 'vision' && s.vision_enabled) hideStartupOverlay();
+  // Voice overlay: close when voice pipeline signals it's actually running
+  // (voice_state goes non-idle means OWW+Whisper loaded and wake word is active)
+  if (_startupMode === 'voice' && s.voice_state && s.voice_state !== 'idle') {
+    hideStartupOverlay(500);
+  }
+  // Vision overlay: vision_enabled flips true immediately on the server before
+  // YOLO has loaded — enforce a minimum display time so overlay is always visible
+  if (_startupMode === 'vision' && s.vision_enabled) {
+    hideStartupOverlay(5000);
+  }
 });
 
 // ── UI Updates ────────────────────────────────────────

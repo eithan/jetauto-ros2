@@ -89,8 +89,18 @@ class DashboardNode(Node):
             Bool, '/jetauto/voice/enable', self._on_voice_enable, qos_reliable)
         self.create_subscription(
             Bool, '/jetauto/detection/enable', self._on_vision_enable, qos_reliable)
+        # TRANSIENT_LOCAL so late-joining subscriber gets last value — avoids
+        # losing the very first 'speaking' publish after tts_node activates.
+        qos_latched = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            depth=1,
+        )
         self.create_subscription(
-            String, '/jetauto/voice/state', self._on_voice_state, qos_reliable)
+            String, '/jetauto/voice/state', self._on_voice_state, qos_latched)
+        # Mirror /tts/speaking (Bool) → voice_state as an additional reliability layer
+        self.create_subscription(
+            Bool, '/tts/speaking', self._on_tts_speaking, qos_reliable)
 
         if HAS_DETECTION_MSGS:
             self.create_subscription(
@@ -150,6 +160,23 @@ class DashboardNode(Node):
     def _on_voice_state(self, msg: String):
         self.state['voice_state'] = msg.data
         self._emit_state()
+
+    def _on_tts_speaking(self, msg: Bool):
+        """Mirror /tts/speaking → voice_state for reliable face animation.
+
+        Acts as a belt-and-suspenders alongside /jetauto/voice/state.
+        Only updates state when TTS starts speaking (always override to
+        'speaking') or finishes speaking (revert to 'idle' only if we were
+        previously in 'speaking' state — avoids clobbering 'listening' etc
+        set by the voice commander).
+        """
+        if msg.data:
+            if self.state['voice_state'] != 'speaking':
+                self.state['voice_state'] = 'speaking'
+                self._emit_state()
+        elif self.state['voice_state'] == 'speaking':
+            self.state['voice_state'] = 'idle'
+            self._emit_state()
 
     def _on_detections(self, msg):
         """Update detection state when detected labels change.
