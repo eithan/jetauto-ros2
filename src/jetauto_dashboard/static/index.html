@@ -20,7 +20,6 @@
   --green: #86efac;
   --text: #f8fafc;
   --text-dim: #b0bec5;
-  --face-outline: rgba(92, 224, 255, 0.8);
 }
 
 html, body {
@@ -84,154 +83,50 @@ html, body {
   aspect-ratio: 1;
 }
 
-/* Scan-line overlay */
-.face-container::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(0, 212, 255, 0.03) 2px,
-    rgba(0, 212, 255, 0.03) 4px
-  );
-  pointer-events: none;
-  border-radius: 50%;
-  z-index: 2;
-}
-
 .face-svg {
   width: 100%;
   height: 100%;
 }
 
-/* Face outline circle glow */
-.face-outline {
-  fill: none;
-  stroke: var(--face-outline);
-  stroke-width: 1.5;
-  filter: drop-shadow(0 0 15px rgba(0, 212, 255, 0.2));
-  transition: all 0.6s ease;
-}
-
-.face-outline.listening {
-  stroke: var(--cyan);
-  filter: drop-shadow(0 0 25px rgba(0, 212, 255, 0.5));
-  animation: pulse-outline 1.5s ease-in-out infinite;
-}
-
-@keyframes pulse-outline {
-  0%, 100% { stroke-width: 1.5; }
-  50% { stroke-width: 2.5; }
-}
-
-/* ── Human Face: Eyes ──────────────────────────────────── */
-.eye-group {
-  transition: transform 0.3s ease;
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-.eye-white {
-  fill: rgba(255, 255, 255, 0.95);
-  transition: all 0.4s ease;
-}
-
-.eye-iris {
-  fill: var(--cyan);
-  transition: all 0.4s ease;
-}
-
-.eye-pupil {
-  fill: #0a0a0f;
-  transition: all 0.4s ease;
-}
-
-.eye-highlight {
-  fill: rgba(255, 255, 255, 0.8);
-}
-
-/* Blink animation */
-@keyframes blink {
-  0%, 42%, 44%, 100% { transform: scaleY(1); }
-  43% { transform: scaleY(0.05); }
-}
-
-.eye-group.idle {
-  animation: blink 4s ease-in-out infinite;
-  transform-origin: center;
-}
-
-/* Listening — wide eyes */
-.eye-group.listening .eye-white { transform: scale(1.1); }
-.eye-group.listening .eye-iris { transform: scale(1.15); }
-.eye-group.listening .eye-pupil { transform: scale(1.2); }
-
-/* Processing — pupils scan side to side */
-@keyframes think-scan {
-  0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(6px); }
-  75% { transform: translateX(-6px); }
-}
-.eye-group.processing .eye-iris { animation: think-scan 1.2s ease-in-out infinite; }
-.eye-group.processing .eye-pupil { animation: think-scan 1.2s ease-in-out infinite; }
-
-/* ── Human Face: Mouth ─────────────────────────────────── */
-.mouth-path {
-  fill: none;
-  stroke: var(--cyan);
-  stroke-width: 2;
-  stroke-linecap: round;
-  transition: all 0.4s ease;
-  filter: drop-shadow(0 0 6px rgba(0, 212, 255, 0.3));
-}
-
-.mouth-path.listening { stroke-width: 2.5; }
-.mouth-path.speaking { stroke-width: 2.5; }
-
 /* ── Robot Face ────────────────────────────────────────── */
 .robot-head-rect {
-  transition: filter 0.4s ease;
+  stroke: rgba(92, 224, 255, 0.35);
+  stroke-width: 1.5;
+  transition: stroke 0.4s ease, filter 0.4s ease;
+}
+
+.robot-head-rect.listening {
+  stroke: var(--cyan);
+  animation: robot-head-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes robot-head-pulse {
+  0%, 100% { stroke-width: 1.5; filter: drop-shadow(0 0 10px rgba(0,212,255,0.25)); }
+  50%       { stroke-width: 2.5; filter: drop-shadow(0 0 22px rgba(0,212,255,0.55)); }
 }
 
 /* Antenna pulse */
-@keyframes antenna-pulse {
+@keyframes antenna-pulse-idle {
   0%, 100% { opacity: 0.5; }
-  50% { opacity: 1; filter: drop-shadow(0 0 8px #ff7b35); }
+  50%       { opacity: 1; filter: drop-shadow(0 0 8px #ff7b35); }
 }
-.antenna-dot {
-  animation: antenna-pulse 2s ease-in-out infinite;
-}
-.antenna-dot.listening {
-  fill: #4ade80;
-  animation: antenna-pulse 0.6s ease-in-out infinite;
-}
-.antenna-dot.processing {
-  fill: var(--amber);
-  animation: antenna-pulse 0.4s ease-in-out infinite;
-}
-.antenna-dot.speaking {
-  fill: var(--cyan);
-  animation: antenna-pulse 0.25s ease-in-out infinite;
+@keyframes antenna-pulse-fast {
+  0%, 100% { opacity: 0.6; }
+  50%       { opacity: 1; filter: drop-shadow(0 0 12px currentColor); }
 }
 
-/* Robot eye rects */
-.robot-eye-fill {
-  transition: fill 0.4s ease, filter 0.4s ease;
-}
+.antenna-dot       { animation: antenna-pulse-idle 2s ease-in-out infinite; }
+.antenna-dot.listen { fill: #4ade80; animation: antenna-pulse-fast 0.6s ease-in-out infinite; }
+.antenna-dot.proc   { fill: var(--amber); animation: antenna-pulse-fast 0.4s ease-in-out infinite; }
+.antenna-dot.speak  { fill: var(--cyan);  animation: antenna-pulse-fast 0.25s ease-in-out infinite; }
 
-@keyframes robot-eye-scan {
-  0%, 100% { transform: translateX(0); }
-  30% { transform: translateX(7px); }
-  70% { transform: translateX(-7px); }
-}
+/* Robot eye fill */
+.robot-eye-fill { transition: fill 0.4s ease, filter 0.4s ease; }
 
 /* Robot mouth bars */
 .robot-bar {
   fill: var(--cyan);
-  opacity: 0.7;
-  transition: height 0.08s ease, y 0.08s ease;
+  opacity: 0.75;
 }
 
 /* ── Voice state label ─────────────────────────────────── */
@@ -243,28 +138,9 @@ html, body {
   color: var(--text-dim);
   transition: color 0.3s;
 }
-.voice-state-label.listening { color: var(--cyan); }
+.voice-state-label.listening  { color: var(--cyan); }
 .voice-state-label.processing { color: var(--amber); }
-.voice-state-label.speaking { color: var(--green); }
-
-/* Face toggle button */
-.face-toggle-btn {
-  background: rgba(92, 224, 255, 0.08);
-  border: 1px solid rgba(92, 224, 255, 0.25);
-  border-radius: 10px;
-  padding: 6px 16px;
-  color: var(--text-dim);
-  font-size: 15px;
-  cursor: pointer;
-  margin-top: 10px;
-  transition: all 0.25s ease;
-  letter-spacing: 1px;
-}
-.face-toggle-btn:hover {
-  background: rgba(92, 224, 255, 0.18);
-  border-color: var(--cyan);
-  color: var(--text);
-}
+.voice-state-label.speaking   { color: var(--green); }
 
 /* ── Status Panel ──────────────────────────────────────── */
 .status-panel {
@@ -311,14 +187,8 @@ html, body {
   cursor: pointer;
   transition: background 0.2s ease, border-color 0.2s ease;
 }
-.stat-card:active {
-  background: rgba(40, 58, 82, 0.9);
-  border-color: rgba(92, 224, 255, 0.4);
-}
-.stat-card.refreshing .stat-value {
-  opacity: 0.5;
-  transition: opacity 0.15s;
-}
+.stat-card:active { background: rgba(40, 58, 82, 0.9); border-color: rgba(92,224,255,0.4); }
+.stat-card.refreshing .stat-value { opacity: 0.5; transition: opacity 0.15s; }
 
 .stat-label {
   font-size: 11px;
@@ -335,7 +205,6 @@ html, body {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
-
 .stat-value.na { color: var(--text-dim); font-size: 20px; }
 
 /* Status dot */
@@ -347,8 +216,8 @@ html, body {
   transition: background 0.3s;
 }
 .status-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
-.status-dot.warning { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
-.status-dot.error { background: var(--red); box-shadow: 0 0 6px var(--red); }
+.status-dot.warning   { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+.status-dot.error     { background: var(--red);   box-shadow: 0 0 6px var(--red);   }
 
 /* Battery bar */
 .battery-bar-container {
@@ -358,15 +227,9 @@ html, body {
   border-radius: 4px;
   overflow: hidden;
 }
-
-.battery-bar {
-  height: 100%;
-  border-radius: 4px;
-  transition: width 0.8s ease, background 0.5s ease;
-  background: var(--green);
-}
+.battery-bar { height: 100%; border-radius: 4px; transition: width 0.8s ease, background 0.5s ease; background: var(--green); }
 .battery-bar.medium { background: var(--amber); }
-.battery-bar.low { background: var(--red); }
+.battery-bar.low    { background: var(--red);   }
 
 /* Detection log */
 .detection-log {
@@ -378,15 +241,9 @@ html, body {
   min-height: 0;
   overflow: hidden;
 }
-
 .detection-log .stat-label { margin-bottom: 8px; }
 
-.detection-list {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
+.detection-list { list-style: none; display: flex; flex-direction: column; gap: 4px; }
 
 .detection-item {
   font-size: 13px;
@@ -398,22 +255,15 @@ html, body {
   background: rgba(92, 224, 255, 0.08);
   animation: fade-in 0.3s ease;
 }
-
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
+  to   { opacity: 1; transform: translateY(0); }
 }
-
 .detection-item .det-label { color: var(--text); font-weight: 500; }
-.detection-item .det-conf { color: var(--cyan); }
-.detection-item .det-time { color: var(--text-dim); font-size: 11px; }
+.detection-item .det-conf  { color: var(--cyan); }
+.detection-item .det-time  { color: var(--text-dim); font-size: 11px; }
 
-.detection-empty {
-  font-size: 13px;
-  color: var(--text-dim);
-  font-style: italic;
-  opacity: 0.5;
-}
+.detection-empty { font-size: 13px; color: var(--text-dim); font-style: italic; opacity: 0.5; }
 
 /* ── Controls Bar ──────────────────────────────────────── */
 .controls-bar {
@@ -428,12 +278,7 @@ html, body {
   backdrop-filter: blur(12px);
 }
 
-/* Toggle button */
-.toggle-group {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
+.toggle-group { display: flex; align-items: center; gap: 12px; }
 
 .toggle-label {
   font-size: 13px;
@@ -448,14 +293,13 @@ html, body {
 .toggle-switch {
   width: 52px;
   height: 28px;
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255,255,255,0.18);
   border-radius: 14px;
   cursor: pointer;
   position: relative;
   transition: background 0.3s ease, box-shadow 0.3s ease;
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  border: 1px solid rgba(255,255,255,0.25);
 }
-
 .toggle-switch::after {
   content: '';
   position: absolute;
@@ -465,97 +309,53 @@ html, body {
   border-radius: 50%;
   transition: transform 0.3s ease, background 0.3s ease;
 }
+.toggle-switch.on { background: rgba(0,212,255,0.2); border-color: var(--cyan); box-shadow: 0 0 12px rgba(0,212,255,0.2); }
+.toggle-switch.on::after { transform: translateX(24px); background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
 
-.toggle-switch.on {
-  background: rgba(0, 212, 255, 0.2);
-  border-color: var(--cyan);
-  box-shadow: 0 0 12px rgba(0, 212, 255, 0.2);
-}
+.control-sep { width: 1px; height: 28px; background: var(--border); }
 
-.toggle-switch.on::after {
-  transform: translateX(24px);
-  background: var(--cyan);
-  box-shadow: 0 0 8px var(--cyan);
-}
-
-/* Separator */
-.control-sep {
-  width: 1px;
-  height: 28px;
-  background: var(--border);
-}
-
-/* Shutdown button */
 .shutdown-btn {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(239,68,68,0.1);
+  border: 1px solid rgba(239,68,68,0.3);
   border-radius: 12px;
   padding: 10px 24px;
   color: var(--red);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 1px;
+  font-size: 13px; font-weight: 600; letter-spacing: 1px;
   text-transform: uppercase;
   cursor: pointer;
   transition: all 0.3s ease;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: flex; align-items: center; gap: 8px;
 }
-
-.shutdown-btn:hover {
-  background: rgba(239, 68, 68, 0.2);
-  border-color: var(--red);
-  box-shadow: 0 0 15px rgba(239, 68, 68, 0.2);
-}
-
-.shutdown-btn.confirm {
-  background: var(--red);
-  color: white;
-  animation: pulse-red 0.8s ease-in-out infinite;
-}
-
+.shutdown-btn:hover { background: rgba(239,68,68,0.2); border-color: var(--red); box-shadow: 0 0 15px rgba(239,68,68,0.2); }
+.shutdown-btn.confirm { background: var(--red); color: white; animation: pulse-red 0.8s ease-in-out infinite; }
 @keyframes pulse-red {
-  0%, 100% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.3); }
-  50% { box-shadow: 0 0 25px rgba(239, 68, 68, 0.6); }
+  0%, 100% { box-shadow: 0 0 10px rgba(239,68,68,0.3); }
+  50%       { box-shadow: 0 0 25px rgba(239,68,68,0.6); }
 }
 
-/* Close button */
 .close-btn {
-  background: rgba(180, 180, 200, 0.08);
-  border: 1px solid rgba(180, 180, 200, 0.25);
+  background: rgba(180,180,200,0.08);
+  border: 1px solid rgba(180,180,200,0.25);
   border-radius: 12px;
   padding: 10px 24px;
   color: var(--text-dim);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 1px;
+  font-size: 13px; font-weight: 600; letter-spacing: 1px;
   text-transform: uppercase;
   cursor: pointer;
   transition: all 0.3s ease;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: flex; align-items: center; gap: 8px;
 }
-
-.close-btn:hover {
-  background: rgba(180, 180, 200, 0.15);
-  border-color: var(--text);
-  color: var(--text);
-}
+.close-btn:hover { background: rgba(180,180,200,0.15); border-color: var(--text); color: var(--text); }
 
 /* Connection status */
 .conn-status {
   position: fixed;
-  top: 12px;
-  left: 12px;
+  top: 12px; left: 12px;
   font-size: 10px;
   letter-spacing: 2px;
   text-transform: uppercase;
   color: var(--text-dim);
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  display: flex; align-items: center; gap: 6px;
   opacity: 0.6;
   z-index: 10;
 }
@@ -572,7 +372,6 @@ html, body {
   justify-content: center;
   animation: overlay-in 0.25s ease;
 }
-
 @keyframes overlay-in {
   from { opacity: 0; }
   to   { opacity: 1; }
@@ -590,39 +389,22 @@ html, body {
   box-shadow: 0 0 60px rgba(0, 200, 255, 0.12);
   animation: dialog-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-
 @keyframes dialog-in {
   from { transform: scale(0.85); opacity: 0; }
   to   { transform: scale(1);    opacity: 1; }
 }
 
 .startup-spinner {
-  width: 56px;
-  height: 56px;
+  width: 56px; height: 56px;
   border: 3px solid rgba(92, 224, 255, 0.15);
   border-top-color: var(--cyan);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
+@keyframes spin { to { transform: rotate(360deg); } }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.startup-msg {
-  font-size: 14px;
-  letter-spacing: 3px;
-  text-transform: uppercase;
-  color: var(--cyan);
-  text-align: center;
-}
-
-.startup-sub {
-  font-size: 12px;
-  color: var(--text-dim);
-  text-align: center;
-  margin-top: -16px;
-}
+.startup-msg { font-size: 14px; letter-spacing: 3px; text-transform: uppercase; color: var(--cyan); text-align: center; }
+.startup-sub { font-size: 12px; color: var(--text-dim); text-align: center; margin-top: -16px; }
 
 /* ── Responsive ────────────────────────────────────────── */
 @media (max-width: 900px) {
@@ -631,7 +413,6 @@ html, body {
   .status-grid { grid-template-columns: 1fr; }
   .controls-bar { flex-wrap: wrap; }
 }
-
 @media (max-height: 600px) {
   .dashboard { padding: 12px; gap: 10px; }
   .card { padding: 12px; }
@@ -648,9 +429,9 @@ html, body {
 </div>
 
 <div class="dashboard">
-  <!-- Main area: face + status -->
   <div class="main-area">
-    <!-- Face panel -->
+
+    <!-- ── Face panel ──────────────────────────────────── -->
     <div class="card face-panel">
       <div class="robot-name" id="robotName">JARVIS</div>
       <div class="face-container">
@@ -662,141 +443,84 @@ html, body {
             </radialGradient>
           </defs>
 
-          <!-- Shared: Face outline -->
-          <circle class="face-outline" id="faceOutline" cx="150" cy="150" r="140"/>
+          <!-- Head -->
+          <rect class="robot-head-rect" id="robotHead"
+                x="62" y="58" width="176" height="190" rx="28" ry="28"
+                fill="url(#robotHeadGrad)"/>
 
-          <!-- ═══════════════════════════════════════ -->
-          <!-- HUMAN FACE GROUP                        -->
-          <!-- ═══════════════════════════════════════ -->
-          <g id="humanFaceGroup">
-            <!-- Left eye -->
-            <g class="eye-group" id="leftEye">
-              <ellipse class="eye-white" cx="110" cy="130" rx="22" ry="18"/>
-              <circle class="eye-iris" cx="110" cy="130" r="11"/>
-              <circle class="eye-pupil" cx="110" cy="130" r="6"/>
-              <circle class="eye-highlight" cx="105" cy="125" r="3"/>
-            </g>
+          <!-- Decorative panel seams -->
+          <line x1="62"  y1="140" x2="238" y2="140" stroke="rgba(92,224,255,0.08)" stroke-width="1"/>
+          <line x1="62"  y1="190" x2="238" y2="190" stroke="rgba(92,224,255,0.08)" stroke-width="1"/>
 
-            <!-- Right eye -->
-            <g class="eye-group" id="rightEye">
-              <ellipse class="eye-white" cx="190" cy="130" rx="22" ry="18"/>
-              <circle class="eye-iris" cx="190" cy="130" r="11"/>
-              <circle class="eye-pupil" cx="190" cy="130" r="6"/>
-              <circle class="eye-highlight" cx="185" cy="125" r="3"/>
-            </g>
+          <!-- Antenna -->
+          <rect x="146" y="22" width="8" height="40" rx="3" fill="rgba(92,224,255,0.55)"/>
+          <circle class="antenna-dot" id="antennaDot" cx="150" cy="18" r="9" fill="#ff6b35"/>
 
-            <!-- Mouth -->
-            <path class="mouth-path idle" id="mouth" d="M 120,195 Q 150,210 180,195"/>
+          <!-- Ear bolts -->
+          <circle cx="68"  cy="148" r="8" fill="rgba(92,224,255,0.1)" stroke="rgba(92,224,255,0.45)" stroke-width="1.5"/>
+          <circle cx="68"  cy="148" r="3" fill="rgba(92,224,255,0.4)"/>
+          <circle cx="232" cy="148" r="8" fill="rgba(92,224,255,0.1)" stroke="rgba(92,224,255,0.45)" stroke-width="1.5"/>
+          <circle cx="232" cy="148" r="3" fill="rgba(92,224,255,0.4)"/>
 
-            <!-- Processing indicator dots -->
-            <g id="processingDots" style="opacity: 0; transition: opacity 0.3s;">
-              <circle cx="138" cy="230" r="3" fill="var(--amber)">
-                <animate attributeName="opacity" values="0.3;1;0.3" dur="1s" begin="0s" repeatCount="indefinite"/>
-              </circle>
-              <circle cx="150" cy="230" r="3" fill="var(--amber)">
-                <animate attributeName="opacity" values="0.3;1;0.3" dur="1s" begin="0.2s" repeatCount="indefinite"/>
-              </circle>
-              <circle cx="162" cy="230" r="3" fill="var(--amber)">
-                <animate attributeName="opacity" values="0.3;1;0.3" dur="1s" begin="0.4s" repeatCount="indefinite"/>
-              </circle>
-            </g>
+          <!-- Eye visor bar -->
+          <rect x="78" y="92" width="144" height="46" rx="10"
+                fill="rgba(0,18,36,0.85)" stroke="rgba(92,224,255,0.18)" stroke-width="1"/>
+
+          <!-- Left eye -->
+          <circle cx="112" cy="115" r="18" fill="rgba(0,25,50,0.9)" stroke="rgba(92,224,255,0.25)" stroke-width="1"/>
+          <circle class="robot-eye-fill" id="robotLeftEye" cx="112" cy="115" r="12"
+                  fill="rgba(56,189,248,0.65)"
+                  style="filter: drop-shadow(0 0 8px rgba(56,189,248,0.5))"/>
+          <circle cx="112" cy="115" r="4" fill="rgba(0,0,0,0.7)"/>
+          <circle cx="109" cy="112" r="2" fill="rgba(255,255,255,0.6)"/>
+
+          <!-- Right eye -->
+          <circle cx="188" cy="115" r="18" fill="rgba(0,25,50,0.9)" stroke="rgba(92,224,255,0.25)" stroke-width="1"/>
+          <circle class="robot-eye-fill" id="robotRightEye" cx="188" cy="115" r="12"
+                  fill="rgba(56,189,248,0.65)"
+                  style="filter: drop-shadow(0 0 8px rgba(56,189,248,0.5))"/>
+          <circle cx="188" cy="115" r="4" fill="rgba(0,0,0,0.7)"/>
+          <circle cx="185" cy="112" r="2" fill="rgba(255,255,255,0.6)"/>
+
+          <!-- Nose panel -->
+          <rect x="135" y="148" width="30" height="15" rx="5"
+                fill="rgba(92,224,255,0.1)" stroke="rgba(92,224,255,0.25)" stroke-width="1"/>
+
+          <!-- Cheek LEDs -->
+          <circle id="cheekLeft"  cx="88"  cy="170" r="5"
+                  fill="rgba(74,222,128,0.5)" style="filter: drop-shadow(0 0 4px rgba(74,222,128,0.6))"/>
+          <circle id="cheekRight" cx="212" cy="170" r="5"
+                  fill="rgba(74,222,128,0.5)" style="filter: drop-shadow(0 0 4px rgba(74,222,128,0.6))"/>
+
+          <!-- Mouth grille container -->
+          <rect x="88" y="196" width="124" height="32" rx="9"
+                fill="rgba(0,18,36,0.85)" stroke="rgba(92,224,255,0.22)" stroke-width="1"/>
+
+          <!-- Speaker bars (JS-animated) -->
+          <rect class="robot-bar" id="robotBar1"  x="97"  width="5" y="205" height="14" rx="2"/>
+          <rect class="robot-bar" id="robotBar2"  x="107" width="5" y="205" height="14" rx="2"/>
+          <rect class="robot-bar" id="robotBar3"  x="117" width="5" y="205" height="14" rx="2"/>
+          <rect class="robot-bar" id="robotBar4"  x="127" width="5" y="205" height="14" rx="2"/>
+          <rect class="robot-bar" id="robotBar5"  x="140" width="5" y="205" height="14" rx="2"/>
+          <rect class="robot-bar" id="robotBar6"  x="153" width="5" y="205" height="14" rx="2"/>
+          <rect class="robot-bar" id="robotBar7"  x="163" width="5" y="205" height="14" rx="2"/>
+          <rect class="robot-bar" id="robotBar8"  x="173" width="5" y="205" height="14" rx="2"/>
+          <rect class="robot-bar" id="robotBar9"  x="183" width="5" y="205" height="14" rx="2"/>
+          <rect class="robot-bar" id="robotBar10" x="193" width="5" y="205" height="14" rx="2"/>
+
+          <!-- Processing scan line -->
+          <g id="robotScanLine" style="opacity:0; transition: opacity 0.3s;">
+            <rect x="78" y="128" width="144" height="4" rx="2" fill="rgba(251,191,36,0.6)">
+              <animateTransform attributeName="transform" type="translate"
+                                values="0,-30;0,30;0,-30" dur="1.2s" repeatCount="indefinite"/>
+            </rect>
           </g>
-
-          <!-- ═══════════════════════════════════════ -->
-          <!-- ROBOT FACE GROUP                        -->
-          <!-- ═══════════════════════════════════════ -->
-          <g id="robotFaceGroup" style="display:none">
-            <!-- Head body -->
-            <rect class="robot-head-rect" x="62" y="58" width="176" height="190" rx="28" ry="28"
-                  fill="url(#robotHeadGrad)" stroke="rgba(92,224,255,0.35)" stroke-width="1.5"/>
-
-            <!-- Panel seam lines -->
-            <line x1="62"  y1="140" x2="238" y2="140" stroke="rgba(92,224,255,0.1)" stroke-width="1"/>
-            <line x1="62"  y1="190" x2="238" y2="190" stroke="rgba(92,224,255,0.1)" stroke-width="1"/>
-
-            <!-- Antenna stem -->
-            <rect x="146" y="22" width="8" height="40" rx="3"
-                  fill="rgba(92,224,255,0.55)"/>
-            <!-- Antenna light -->
-            <circle class="antenna-dot" id="antennaDot" cx="150" cy="18" r="9"
-                    fill="#ff6b35"/>
-
-            <!-- Ear bolts -->
-            <circle cx="68" cy="148" r="8"
-                    fill="rgba(92,224,255,0.12)" stroke="rgba(92,224,255,0.45)" stroke-width="1.5"/>
-            <circle cx="68" cy="148" r="3" fill="rgba(92,224,255,0.4)"/>
-            <circle cx="232" cy="148" r="8"
-                    fill="rgba(92,224,255,0.12)" stroke="rgba(92,224,255,0.45)" stroke-width="1.5"/>
-            <circle cx="232" cy="148" r="3" fill="rgba(92,224,255,0.4)"/>
-
-            <!-- Eye visor bar -->
-            <rect x="78" y="92" width="144" height="46" rx="10"
-                  fill="rgba(0,18,36,0.85)" stroke="rgba(92,224,255,0.2)" stroke-width="1"/>
-
-            <!-- Left eye outer ring + fill -->
-            <circle cx="112" cy="115" r="18"
-                    fill="rgba(0,25,50,0.9)" stroke="rgba(92,224,255,0.3)" stroke-width="1"/>
-            <circle class="robot-eye-fill" id="robotLeftEyeFill" cx="112" cy="115" r="12"
-                    fill="rgba(56,189,248,0.65)"
-                    style="filter: drop-shadow(0 0 8px rgba(56,189,248,0.5))"/>
-            <!-- Left eye pupil dot -->
-            <circle cx="112" cy="115" r="4" fill="rgba(0,0,0,0.7)"/>
-            <circle cx="109" cy="112" r="2" fill="rgba(255,255,255,0.6)"/>
-
-            <!-- Right eye outer ring + fill -->
-            <circle cx="188" cy="115" r="18"
-                    fill="rgba(0,25,50,0.9)" stroke="rgba(92,224,255,0.3)" stroke-width="1"/>
-            <circle class="robot-eye-fill" id="robotRightEyeFill" cx="188" cy="115" r="12"
-                    fill="rgba(56,189,248,0.65)"
-                    style="filter: drop-shadow(0 0 8px rgba(56,189,248,0.5))"/>
-            <!-- Right eye pupil dot -->
-            <circle cx="188" cy="115" r="4" fill="rgba(0,0,0,0.7)"/>
-            <circle cx="185" cy="112" r="2" fill="rgba(255,255,255,0.6)"/>
-
-            <!-- Nose panel -->
-            <rect x="135" y="148" width="30" height="15" rx="5"
-                  fill="rgba(92,224,255,0.12)" stroke="rgba(92,224,255,0.28)" stroke-width="1"/>
-
-            <!-- Cheek status LEDs -->
-            <circle class="robot-cheek-led" id="robotCheekLeft"  cx="88"  cy="170" r="5"
-                    fill="rgba(74,222,128,0.5)" style="filter: drop-shadow(0 0 4px rgba(74,222,128,0.6))"/>
-            <circle class="robot-cheek-led" id="robotCheekRight" cx="212" cy="170" r="5"
-                    fill="rgba(74,222,128,0.5)" style="filter: drop-shadow(0 0 4px rgba(74,222,128,0.6))"/>
-
-            <!-- Mouth grille container -->
-            <rect x="88" y="196" width="124" height="32" rx="9"
-                  fill="rgba(0,18,36,0.85)" stroke="rgba(92,224,255,0.25)" stroke-width="1"/>
-
-            <!-- Speaker bars (animated by JS when speaking) -->
-            <!-- Each bar: cx fixed, width=5, height animated, centered at y=212 -->
-            <rect class="robot-bar" id="robotBar1" x="97"  width="5" y="205" height="14" rx="2"/>
-            <rect class="robot-bar" id="robotBar2" x="107" width="5" y="205" height="14" rx="2"/>
-            <rect class="robot-bar" id="robotBar3" x="117" width="5" y="205" height="14" rx="2"/>
-            <rect class="robot-bar" id="robotBar4" x="127" width="5" y="205" height="14" rx="2"/>
-            <rect class="robot-bar" id="robotBar5" x="140" width="5" y="205" height="14" rx="2"/>
-            <rect class="robot-bar" id="robotBar6" x="153" width="5" y="205" height="14" rx="2"/>
-            <rect class="robot-bar" id="robotBar7" x="163" width="5" y="205" height="14" rx="2"/>
-            <rect class="robot-bar" id="robotBar8" x="173" width="5" y="205" height="14" rx="2"/>
-            <rect class="robot-bar" id="robotBar9" x="183" width="5" y="205" height="14" rx="2"/>
-            <rect class="robot-bar" id="robotBar10" x="193" width="5" y="205" height="14" rx="2"/>
-
-            <!-- Processing scan line (shown during processing) -->
-            <g id="robotScanLine" style="opacity:0; transition: opacity 0.3s;">
-              <rect x="78" y="128" width="144" height="4" rx="2"
-                    fill="rgba(251,191,36,0.6)">
-                <animateTransform attributeName="transform" type="translate"
-                                  values="0,-30;0,30;0,-30" dur="1.2s" repeatCount="indefinite"/>
-              </rect>
-            </g>
-          </g>
-
         </svg>
       </div>
       <div class="voice-state-label" id="voiceStateLabel">idle</div>
-      <button class="face-toggle-btn" id="faceToggleBtn" onclick="toggleFaceMode()" title="Switch face style">🤖 Robot</button>
     </div>
 
-    <!-- Status panel -->
+    <!-- ── Status panel ────────────────────────────────── -->
     <div class="card status-panel">
       <div class="status-header">
         <div>
@@ -806,52 +530,30 @@ html, body {
       </div>
 
       <div class="status-grid">
-        <!-- Battery -->
         <div class="stat-card" onclick="refreshStat(this)">
-          <div class="stat-label">
-            <span class="status-dot" id="batteryDot"></span>
-            🔋 Battery
-          </div>
+          <div class="stat-label"><span class="status-dot" id="batteryDot"></span>🔋 Battery</div>
           <div class="stat-value" id="batteryValue">N/A</div>
           <div id="batteryVoltage" style="display:none; font-size:12px; color:var(--text-dim); margin-top:-4px;"></div>
-          <div class="battery-bar-container">
-            <div class="battery-bar" id="batteryBar" style="width: 0%"></div>
-          </div>
+          <div class="battery-bar-container"><div class="battery-bar" id="batteryBar" style="width:0%"></div></div>
         </div>
 
-        <!-- Uptime -->
         <div class="stat-card" onclick="refreshStat(this)">
-          <div class="stat-label">
-            <span class="status-dot connected"></span>
-            ⏱ Uptime
-          </div>
+          <div class="stat-label"><span class="status-dot connected"></span>⏱ Uptime</div>
           <div class="stat-value" id="uptimeValue">0:00:00</div>
         </div>
 
-        <!-- CPU Temp -->
         <div class="stat-card" onclick="refreshStat(this)">
-          <div class="stat-label">
-            <span class="status-dot" id="cpuDot"></span>
-            🌡 CPU Temp
-          </div>
+          <div class="stat-label"><span class="status-dot" id="cpuDot"></span>🌡 CPU Temp</div>
           <div class="stat-value" id="cpuTempValue">N/A</div>
         </div>
 
-        <!-- GPU Temp -->
         <div class="stat-card" onclick="refreshStat(this)">
-          <div class="stat-label">
-            <span class="status-dot" id="gpuDot"></span>
-            🎮 GPU Temp
-          </div>
+          <div class="stat-label"><span class="status-dot" id="gpuDot"></span>🎮 GPU Temp</div>
           <div class="stat-value" id="gpuTempValue">N/A</div>
         </div>
 
-        <!-- Detection log -->
         <div class="detection-log">
-          <div class="stat-label">
-            <span class="status-dot" id="detDot"></span>
-            👁 Detection Log
-          </div>
+          <div class="stat-label"><span class="status-dot" id="detDot"></span>👁 Detection Log</div>
           <ul class="detection-list" id="detectionList">
             <li class="detection-empty">No detections yet</li>
           </ul>
@@ -860,7 +562,7 @@ html, body {
     </div>
   </div>
 
-  <!-- Controls bar -->
+  <!-- ── Controls bar ──────────────────────────────────── -->
   <div class="controls-bar">
     <div class="toggle-group" id="voiceGroup">
       <span class="toggle-label">🎤 Voice</span>
@@ -882,7 +584,7 @@ html, body {
 
     <div class="control-sep"></div>
 
-    <button class="close-btn" onclick="closeDashboard()" title="Close dashboard">
+    <button class="close-btn" onclick="closeDashboard()">
       <span>✕</span> Close
     </button>
   </div>
@@ -897,7 +599,6 @@ html, body {
   </div>
 </div>
 
-<!-- SocketIO -->
 <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
 <script>
 // ── State ─────────────────────────────────────────────
@@ -905,16 +606,15 @@ let voiceEnabled = false;
 let visionEnabled = false;
 let shutdownPending = false;
 let shutdownTimer = null;
-let faceMode = 'human'; // 'human' | 'robot'
 
-// ── Startup overlay state ─────────────────────────────
-let _startupMode = null;   // 'voice' | 'vision' | null
+// ── Startup overlay ───────────────────────────────────
+let _startupMode = null;
 let _startupTimeout = null;
 
 function showStartupOverlay(mode) {
   _startupMode = mode;
-  const msg = mode === 'voice' ? 'Starting voice pipeline...' : 'Starting vision pipeline...';
-  document.getElementById('startupMsg').textContent = msg;
+  document.getElementById('startupMsg').textContent =
+    mode === 'voice' ? 'Starting voice pipeline...' : 'Starting vision pipeline...';
   document.getElementById('startupOverlay').style.display = 'flex';
   clearTimeout(_startupTimeout);
   _startupTimeout = setTimeout(hideStartupOverlay, 45000);
@@ -926,7 +626,7 @@ function hideStartupOverlay() {
   document.getElementById('startupOverlay').style.display = 'none';
 }
 
-// ── Socket connection ─────────────────────────────────
+// ── Socket ────────────────────────────────────────────
 const socket = io({ reconnection: true, reconnectionDelay: 1000 });
 
 socket.on('connect', () => {
@@ -954,13 +654,9 @@ socket.on('state', (s) => {
   updateUptime(s.uptime);
   updateVoiceState(s.voice_state);
   updateDetections(s.detections);
-
-  // Sync toggles
-  voiceEnabled = s.voice_enabled;
+  voiceEnabled  = s.voice_enabled;
   visionEnabled = s.vision_enabled;
   syncToggles();
-
-  // Clear startup overlay once subsystem confirms it's active
   if (_startupMode === 'voice'  && s.voice_enabled)  hideStartupOverlay();
   if (_startupMode === 'vision' && s.vision_enabled) hideStartupOverlay();
 });
@@ -968,122 +664,62 @@ socket.on('state', (s) => {
 // ── UI Updates ────────────────────────────────────────
 
 function updateBattery(val) {
-  const el = document.getElementById('batteryValue');
+  const el  = document.getElementById('batteryValue');
   const bar = document.getElementById('batteryBar');
   const dot = document.getElementById('batteryDot');
-
-  if (val === null || val === undefined) {
-    el.textContent = 'N/A';
-    el.className = 'stat-value na';
-    bar.style.width = '0%';
-    dot.className = 'status-dot';
+  if (val == null) {
+    el.textContent = 'N/A'; el.className = 'stat-value na';
+    bar.style.width = '0%'; dot.className = 'status-dot';
     return;
   }
-
   el.textContent = val.toFixed(0) + '%';
   el.className = 'stat-value';
   bar.style.width = Math.min(100, Math.max(0, val)) + '%';
-
   const voltEl = document.getElementById('batteryVoltage');
   if (voltEl && window._lastBatteryVoltage != null) {
     voltEl.textContent = window._lastBatteryVoltage.toFixed(2) + 'V';
     voltEl.style.display = '';
   }
-
-  if (val > 50) {
-    bar.className = 'battery-bar';
-    dot.className = 'status-dot connected';
-  } else if (val > 20) {
-    bar.className = 'battery-bar medium';
-    dot.className = 'status-dot warning';
-  } else {
-    bar.className = 'battery-bar low';
-    dot.className = 'status-dot error';
-  }
+  if (val > 50)      { bar.className = 'battery-bar';        dot.className = 'status-dot connected'; }
+  else if (val > 20) { bar.className = 'battery-bar medium'; dot.className = 'status-dot warning'; }
+  else               { bar.className = 'battery-bar low';    dot.className = 'status-dot error'; }
 }
 
-function updateTemps(cpu, gpu) {
-  updateTemp('cpuTempValue', 'cpuDot', cpu);
-  updateTemp('gpuTempValue', 'gpuDot', gpu);
-}
+function updateTemps(cpu, gpu) { updateTemp('cpuTempValue','cpuDot',cpu); updateTemp('gpuTempValue','gpuDot',gpu); }
 
 function updateTemp(elId, dotId, val) {
   const el = document.getElementById(elId);
   const dot = document.getElementById(dotId);
-
-  if (val === null || val === undefined) {
-    el.textContent = 'N/A';
-    el.className = 'stat-value na';
-    dot.className = 'status-dot';
-    return;
-  }
-
+  if (val == null) { el.textContent = 'N/A'; el.className = 'stat-value na'; dot.className = 'status-dot'; return; }
   el.textContent = val.toFixed(0) + '°C';
   el.className = 'stat-value';
-
-  if (val < 60) {
-    dot.className = 'status-dot connected';
-    el.style.color = '';
-  } else if (val < 80) {
-    dot.className = 'status-dot warning';
-    el.style.color = 'var(--amber)';
-  } else {
-    dot.className = 'status-dot error';
-    el.style.color = 'var(--red)';
-  }
+  if (val < 60)      { dot.className = 'status-dot connected'; el.style.color = ''; }
+  else if (val < 80) { dot.className = 'status-dot warning';   el.style.color = 'var(--amber)'; }
+  else               { dot.className = 'status-dot error';     el.style.color = 'var(--red)'; }
 }
 
 function updateUptime(seconds) {
-  if (!seconds && seconds !== 0) return;
+  if (seconds == null) return;
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = seconds % 60;
   document.getElementById('uptimeValue').textContent =
-    `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
 }
 
 function updateVoiceState(state) {
   if (!state) state = 'idle';
-
   const label = document.getElementById('voiceStateLabel');
-  const outline = document.getElementById('faceOutline');
-  const leftEye = document.getElementById('leftEye');
-  const rightEye = document.getElementById('rightEye');
-  const mouth = document.getElementById('mouth');
-  const dots = document.getElementById('processingDots');
-
-  // Clear all state classes
   label.className = 'voice-state-label';
-  outline.className = 'face-outline';
-  leftEye.className = 'eye-group';
-  rightEye.className = 'eye-group';
-  mouth.className = 'mouth-path';
-  dots.style.opacity = '0';
-
-  // Apply new state
-  label.textContent = state;
   label.classList.add(state);
-  outline.classList.add(state);
-  leftEye.classList.add(state);
-  rightEye.classList.add(state);
-  mouth.classList.add(state);
-
-  if (state === 'processing') {
-    dots.style.opacity = '1';
-  }
-
-  // Drive human mouth via JS
-  setMouthState(state);
-
-  // Drive robot face
+  label.textContent = state;
   updateRobotFaceState(state);
 }
 
 let _lastDetectionsKey = '';
 function updateDetections(dets) {
   const list = document.getElementById('detectionList');
-  const dot = document.getElementById('detDot');
-
+  const dot  = document.getElementById('detDot');
   if (!dets || dets.length === 0) {
     if (_lastDetectionsKey !== 'empty') {
       list.innerHTML = '<li class="detection-empty">No detections yet</li>';
@@ -1092,12 +728,9 @@ function updateDetections(dets) {
     dot.className = 'status-dot';
     return;
   }
-
-  // Dedup by label only — time field changes don't trigger re-render
   const key = dets.map(d => d.label).join('|');
   if (key === _lastDetectionsKey) return;
   _lastDetectionsKey = key;
-
   dot.className = 'status-dot connected';
   list.innerHTML = dets.map(d =>
     `<li class="detection-item">
@@ -1109,15 +742,10 @@ function updateDetections(dets) {
 }
 
 function syncToggles() {
-  const vt = document.getElementById('voiceToggle');
-  const vg = document.getElementById('voiceGroup');
-  vt.className = 'toggle-switch' + (voiceEnabled ? ' on' : '');
-  vg.className = 'toggle-group' + (voiceEnabled ? ' active' : '');
-
-  const vit = document.getElementById('visionToggle');
-  const vig = document.getElementById('visionGroup');
-  vit.className = 'toggle-switch' + (visionEnabled ? ' on' : '');
-  vig.className = 'toggle-group' + (visionEnabled ? ' active' : '');
+  document.getElementById('voiceToggle').className  = 'toggle-switch' + (voiceEnabled  ? ' on' : '');
+  document.getElementById('voiceGroup').className   = 'toggle-group'  + (voiceEnabled  ? ' active' : '');
+  document.getElementById('visionToggle').className = 'toggle-switch' + (visionEnabled ? ' on' : '');
+  document.getElementById('visionGroup').className  = 'toggle-group'  + (visionEnabled ? ' active' : '');
 }
 
 // ── Controls ──────────────────────────────────────────
@@ -1138,7 +766,6 @@ function toggleVision() {
 
 function handleShutdown() {
   const btn = document.getElementById('shutdownBtn');
-
   if (!shutdownPending) {
     shutdownPending = true;
     btn.className = 'shutdown-btn confirm';
@@ -1166,58 +793,10 @@ function refreshStat(card) {
 
 function closeDashboard() {
   socket.emit('quit');
-  setTimeout(() => {
-    window.close();
-    setTimeout(() => { window.location.href = 'about:blank'; }, 300);
-  }, 200);
+  setTimeout(() => { window.close(); setTimeout(() => { window.location.href = 'about:blank'; }, 300); }, 200);
 }
 
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeDashboard();
-});
-
-// ── Human Mouth animation (JS-driven) ────────────────
-
-const MOUTH_PATHS = {
-  idle:       "M 120,195 Q 150,210 180,195",
-  listening:  "M 125,195 Q 150,208 175,195",
-  processing: "M 130,198 Q 150,200 170,198",
-  speaking: [
-    "M 125,192 Q 150,215 175,192",
-    "M 128,195 Q 150,205 172,195",
-    "M 122,190 Q 150,220 178,190",
-    "M 130,195 Q 150,202 170,195",
-    "M 124,192 Q 150,218 176,192",
-    "M 128,195 Q 150,208 172,195",
-  ],
-};
-
-let speakAnimFrame = 0;
-let speakAnimInterval = null;
-let currentMouthState = 'idle';
-
-function setMouthState(state) {
-  const mouth = document.getElementById('mouth');
-  if (currentMouthState === state) return;
-  currentMouthState = state;
-
-  if (speakAnimInterval) {
-    clearInterval(speakAnimInterval);
-    speakAnimInterval = null;
-  }
-
-  if (state === 'speaking') {
-    speakAnimFrame = 0;
-    speakAnimInterval = setInterval(() => {
-      const paths = MOUTH_PATHS.speaking;
-      mouth.setAttribute('d', paths[speakAnimFrame % paths.length]);
-      speakAnimFrame++;
-    }, 100);
-  } else {
-    const path = MOUTH_PATHS[state] || MOUTH_PATHS.idle;
-    mouth.setAttribute('d', path);
-  }
-}
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDashboard(); });
 
 // ── Robot Face ────────────────────────────────────────
 
@@ -1226,30 +805,25 @@ const ROBOT_BAR_IDS = [
   'robotBar6','robotBar7','robotBar8','robotBar9','robotBar10',
 ];
 
-// Wave patterns: height values per frame (centered at y_center=212, so y = 212 - h/2)
 const ROBOT_BAR_WAVES = [
   [6, 12, 18, 12, 6,  12, 18, 12, 6,  10],
   [8, 16, 10, 18, 14, 6,  12, 18, 10, 14],
-  [14,8,  14, 6,  18, 14, 8,  6,  18, 8 ],
+  [14, 8, 14, 6,  18, 14, 8,  6,  18, 8 ],
   [18,12, 6,  12, 10, 18, 6,  12, 14, 6 ],
   [10,18, 12, 8,  14, 8,  18, 6,  12, 18],
   [6, 10, 18, 14, 8,  16, 10, 18, 8,  12],
 ];
-
-const ROBOT_BAR_IDLE = [14, 14, 14, 14, 14, 14, 14, 14, 14, 14];
+const ROBOT_BAR_IDLE = [14,14,14,14,14,14,14,14,14,14];
 const Y_BAR_CENTER = 212;
 
 let robotBarFrame = 0;
 let robotBarInterval = null;
-let currentRobotState = 'idle';
+let currentRobotState = '';
 
 function setRobotBars(heights) {
   heights.forEach((h, i) => {
     const el = document.getElementById(ROBOT_BAR_IDS[i]);
-    if (el) {
-      el.setAttribute('height', h);
-      el.setAttribute('y', Y_BAR_CENTER - h / 2);
-    }
+    if (el) { el.setAttribute('height', h); el.setAttribute('y', Y_BAR_CENTER - h / 2); }
   });
 }
 
@@ -1257,60 +831,56 @@ function updateRobotFaceState(state) {
   if (currentRobotState === state) return;
   currentRobotState = state;
 
-  const leftEye   = document.getElementById('robotLeftEyeFill');
-  const rightEye  = document.getElementById('robotRightEyeFill');
-  const antDot    = document.getElementById('antennaDot');
-  const scanLine  = document.getElementById('robotScanLine');
-  const cheekL    = document.getElementById('robotCheekLeft');
-  const cheekR    = document.getElementById('robotCheekRight');
+  const leftEye  = document.getElementById('robotLeftEye');
+  const rightEye = document.getElementById('robotRightEye');
+  const antDot   = document.getElementById('antennaDot');
+  const headRect = document.getElementById('robotHead');
+  const scanLine = document.getElementById('robotScanLine');
+  const cheekL   = document.getElementById('cheekLeft');
+  const cheekR   = document.getElementById('cheekRight');
 
-  // Stop speaking bar animation
-  if (robotBarInterval) {
-    clearInterval(robotBarInterval);
-    robotBarInterval = null;
-  }
+  // Stop speaking animation
+  if (robotBarInterval) { clearInterval(robotBarInterval); robotBarInterval = null; }
   setRobotBars(ROBOT_BAR_IDLE);
 
-  // Reset eye transforms
-  if (leftEye)  leftEye.style.transform = '';
-  if (rightEye) rightEye.style.transform = '';
+  // Reset scan line + head
   if (scanLine) scanLine.style.opacity = '0';
+  if (headRect) { headRect.className = 'robot-head-rect'; if (state === 'listening') headRect.classList.add('listening'); }
 
-  // Update antenna dot class
+  // Antenna class
   if (antDot) {
     antDot.className = 'antenna-dot';
-    if (state !== 'idle') antDot.classList.add(state);
+    if      (state === 'listening')  antDot.classList.add('listen');
+    else if (state === 'processing') antDot.classList.add('proc');
+    else if (state === 'speaking')   antDot.classList.add('speak');
   }
+
+  const setEyes = (fill, glow) => {
+    if (leftEye)  { leftEye.setAttribute('fill',  fill); leftEye.style.filter  = `drop-shadow(0 0 ${glow})`; }
+    if (rightEye) { rightEye.setAttribute('fill', fill); rightEye.style.filter = `drop-shadow(0 0 ${glow})`; }
+  };
+  const setCheeks = (fill) => {
+    if (cheekL) cheekL.setAttribute('fill', fill);
+    if (cheekR) cheekR.setAttribute('fill', fill);
+  };
 
   switch (state) {
     case 'idle':
-      if (leftEye)  { leftEye.setAttribute('fill',  'rgba(56,189,248,0.55)'); leftEye.style.filter  = 'drop-shadow(0 0 6px rgba(56,189,248,0.4))'; }
-      if (rightEye) { rightEye.setAttribute('fill', 'rgba(56,189,248,0.55)'); rightEye.style.filter = 'drop-shadow(0 0 6px rgba(56,189,248,0.4))'; }
-      if (cheekL) cheekL.setAttribute('fill', 'rgba(74,222,128,0.5)');
-      if (cheekR) cheekR.setAttribute('fill', 'rgba(74,222,128,0.5)');
+      setEyes('rgba(56,189,248,0.55)', '6px rgba(56,189,248,0.4)');
+      setCheeks('rgba(74,222,128,0.5)');
       break;
-
     case 'listening':
-      if (leftEye)  { leftEye.setAttribute('fill',  'rgba(74,222,128,0.9)'); leftEye.style.filter  = 'drop-shadow(0 0 12px rgba(74,222,128,0.8))'; }
-      if (rightEye) { rightEye.setAttribute('fill', 'rgba(74,222,128,0.9)'); rightEye.style.filter = 'drop-shadow(0 0 12px rgba(74,222,128,0.8))'; }
-      if (cheekL) cheekL.setAttribute('fill', 'rgba(74,222,128,0.9)');
-      if (cheekR) cheekR.setAttribute('fill', 'rgba(74,222,128,0.9)');
+      setEyes('rgba(74,222,128,0.9)', '14px rgba(74,222,128,0.8)');
+      setCheeks('rgba(74,222,128,0.9)');
       break;
-
     case 'processing':
-      if (leftEye)  { leftEye.setAttribute('fill',  'rgba(251,191,36,0.9)'); leftEye.style.filter  = 'drop-shadow(0 0 12px rgba(251,191,36,0.7))'; }
-      if (rightEye) { rightEye.setAttribute('fill', 'rgba(251,191,36,0.9)'); rightEye.style.filter = 'drop-shadow(0 0 12px rgba(251,191,36,0.7))'; }
-      if (cheekL) cheekL.setAttribute('fill', 'rgba(251,191,36,0.8)');
-      if (cheekR) cheekR.setAttribute('fill', 'rgba(251,191,36,0.8)');
+      setEyes('rgba(251,191,36,0.9)', '14px rgba(251,191,36,0.7)');
+      setCheeks('rgba(251,191,36,0.8)');
       if (scanLine) scanLine.style.opacity = '1';
       break;
-
     case 'speaking':
-      if (leftEye)  { leftEye.setAttribute('fill',  'rgba(92,224,255,0.95)'); leftEye.style.filter  = 'drop-shadow(0 0 16px rgba(92,224,255,0.9))'; }
-      if (rightEye) { rightEye.setAttribute('fill', 'rgba(92,224,255,0.95)'); rightEye.style.filter = 'drop-shadow(0 0 16px rgba(92,224,255,0.9))'; }
-      if (cheekL) cheekL.setAttribute('fill', 'rgba(92,224,255,0.8)');
-      if (cheekR) cheekR.setAttribute('fill', 'rgba(92,224,255,0.8)');
-      // Animate speaker bars
+      setEyes('rgba(92,224,255,0.95)', '18px rgba(92,224,255,0.9)');
+      setCheeks('rgba(92,224,255,0.8)');
       robotBarFrame = 0;
       robotBarInterval = setInterval(() => {
         setRobotBars(ROBOT_BAR_WAVES[robotBarFrame % ROBOT_BAR_WAVES.length]);
@@ -1320,23 +890,7 @@ function updateRobotFaceState(state) {
   }
 }
 
-// ── Face toggle ───────────────────────────────────────
-
-function toggleFaceMode() {
-  faceMode = faceMode === 'human' ? 'robot' : 'human';
-  document.getElementById('humanFaceGroup').style.display = faceMode === 'human' ? '' : 'none';
-  document.getElementById('robotFaceGroup').style.display = faceMode === 'robot'  ? '' : 'none';
-  const btn = document.getElementById('faceToggleBtn');
-  btn.textContent = faceMode === 'human' ? '🤖 Robot' : '👤 Human';
-  // Re-apply current voice state to the new face
-  const currentState = document.getElementById('voiceStateLabel').textContent || 'idle';
-  currentMouthState = '';   // force re-apply
-  currentRobotState = '';
-  updateVoiceState(currentState);
-}
-
 // ── Clock ─────────────────────────────────────────────
-
 function updateClock() {
   const now = new Date();
   document.getElementById('clock').textContent =
@@ -1344,7 +898,6 @@ function updateClock() {
   document.getElementById('clockDate').textContent =
     now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
 }
-
 setInterval(updateClock, 1000);
 updateClock();
 </script>

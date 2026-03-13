@@ -42,13 +42,15 @@ class TTSNode(LifecycleNode):
 
         # -- State --
         self.last_announcement_time = 0.0
-        self.last_announced_labels = set()
-        self.last_detection_time = 0.0   # tracks when we last saw anything
+        # Per-label state: {label: {'last_seen': float, 'count': int, 'announced_count': int}}
+        # Replaces the old flat set — tracks instance counts and per-label expiry.
+        self._label_state: dict = {}
         self.tts_engine = None
         self._speech_queue = queue.Queue(maxsize=10)
         self._speaker_thread = None
         self._shutdown_event = threading.Event()
         self._speaking_pub = None        # set in on_activate
+        self._voice_state_pub = None     # set in on_activate
 
         self.get_logger().info('TTSNode created (inactive — waiting for configure)')
 
@@ -86,6 +88,8 @@ class TTSNode(LifecycleNode):
         )
         # Publish speaking state so the voice commander can mute the mic
         self._speaking_pub = self.create_publisher(Bool, '/tts/speaking', 1)
+        # Publish voice state so the dashboard face animates during TTS
+        self._voice_state_pub = self.create_publisher(String, '/jetauto/voice/state', 1)
         self.get_logger().info('Activated — listening for detections')
         return super().on_activate(state)
 
@@ -168,6 +172,7 @@ class TTSNode(LifecycleNode):
 
             try:
                 self._publish_speaking(True)
+                self._publish_voice_state('speaking')
                 self.tts_engine.say(text)
                 self.tts_engine.runAndWait()
                 time.sleep(0.8)   # room reverb buffer — mic drains while this runs
@@ -175,6 +180,7 @@ class TTSNode(LifecycleNode):
                 self.get_logger().error(f'TTS speak error: {e}')
             finally:
                 self._publish_speaking(False)
+                self._publish_voice_state('idle')
 
     def _stop_speaker(self):
         """Signal the speaker thread to stop and wait for it."""
@@ -190,6 +196,13 @@ class TTSNode(LifecycleNode):
             msg.data = speaking
             self._speaking_pub.publish(msg)
 
+    def _publish_voice_state(self, state: str) -> None:
+        """Publish /jetauto/voice/state so the dashboard face animates."""
+        if self._voice_state_pub is not None:
+            msg = String()
+            msg.data = state
+            self._voice_state_pub.publish(msg)
+
     def _enqueue_speech(self, text: str):
         """Add text to the speech queue (non-blocking, drops if full)."""
         try:
@@ -202,10 +215,20 @@ class TTSNode(LifecycleNode):
     # ------------------------------------------------------------------ #
 
     def _detection_callback(self, msg: DetectedObjectArray):
-        """Process detected objects and announce them."""
+        """Process detected objects and announce them.
+
+        Announcement logic:
+        - A label is announced when first seen (announced_count == 0).
+        - It is announced again when the instance count increases
+          (e.g. 1 person → 2 people in frame simultaneously).
+        - Per-label expiry: if a label hasn't been seen for
+          scene_forget_timeout seconds it is evicted. When it reappears it
+          is treated as new and announced again (handles "person leaves,
+          different person enters" across frames).
+        - The global cooldown still prevents spam — all announcement
+          decisions still respect self.cooldown.
+        """
         now = time.time()
-        if now - self.last_announcement_time < self.cooldown:
-            return
 
         if not msg.objects:
             return
@@ -215,37 +238,54 @@ class TTSNode(LifecycleNode):
             obj for obj in msg.objects
             if obj.confidence >= self.min_confidence
         ]
-
         if not filtered:
             return
 
-        # Get unique labels (preserve order, cap count)
-        labels = []
-        seen = set()
+        # Evict labels not seen within scene_forget_timeout
+        for label in list(self._label_state.keys()):
+            if now - self._label_state[label]['last_seen'] > self.scene_forget_timeout:
+                self.get_logger().debug(f'Label "{label}" expired from scene memory')
+                del self._label_state[label]
+
+        # Count instances per label in this frame
+        frame_counts: dict = {}
         for obj in filtered:
-            if obj.label not in seen:
-                labels.append(obj.label)
-                seen.add(obj.label)
-            if len(labels) >= self.max_objects:
-                break
+            frame_counts[obj.label] = frame_counts.get(obj.label, 0) + 1
 
-        current_set = set(labels)
+        # Update per-label state with current frame
+        for label, count in frame_counts.items():
+            if label not in self._label_state:
+                self._label_state[label] = {
+                    'last_seen': now,
+                    'count': count,
+                    'announced_count': 0,
+                }
+            else:
+                self._label_state[label]['last_seen'] = now
+                self._label_state[label]['count'] = count
 
-        # Forget old labels if nothing was detected for a while (scene change)
-        if now - self.last_detection_time > self.scene_forget_timeout:
-            self.last_announced_labels = set()
-        self.last_detection_time = now
+        # Decide what to announce: new labels OR count increased
+        to_announce = []
+        for label, count in frame_counts.items():
+            state = self._label_state[label]
+            if state['announced_count'] == 0 or count > state['announced_count']:
+                to_announce.append(label)
 
-        # Only announce if there are genuinely new labels not seen before
-        new_labels = current_set - self.last_announced_labels
-        if self.announce_new_only and not new_labels:
+        if not to_announce:
             return
 
-        self.last_announced_labels |= current_set
+        # Respect global cooldown
+        if now - self.last_announcement_time < self.cooldown:
+            return
+
+        # Mark announced counts
+        for label in to_announce:
+            self._label_state[label]['announced_count'] = frame_counts[label]
+
         self.last_announcement_time = now
 
-        # Build and enqueue sentence
-        sentence = self._build_sentence(labels)
+        # Build and enqueue sentence (cap at max_objects)
+        sentence = self._build_sentence(to_announce[:self.max_objects])
         self.get_logger().info(f'Announcing: "{sentence}"')
         self._enqueue_speech(sentence)
 
