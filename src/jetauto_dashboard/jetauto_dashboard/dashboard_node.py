@@ -268,16 +268,22 @@ class DashboardNode(Node):
             self.get_logger().error(f'Failed to launch voice: {e}')
 
     def _kill_voice(self):
-        """Kill the voice control pipeline."""
+        """Kill the voice control pipeline gracefully."""
         if self._voice_proc is not None and self._voice_proc.poll() is None:
+            pid = self._voice_proc.pid
             try:
-                os.killpg(os.getpgid(self._voice_proc.pid), signal.SIGTERM)
-                self._voice_proc.wait(timeout=5)
-            except Exception:
+                pgid = os.getpgid(pid)
+                os.killpg(pgid, signal.SIGINT)
                 try:
-                    os.killpg(os.getpgid(self._voice_proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
+                    self._voice_proc.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    os.killpg(pgid, signal.SIGTERM)
+                    try:
+                        self._voice_proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(pgid, signal.SIGKILL)
+            except Exception:
+                pass
             self.get_logger().info('Voice pipeline stopped')
         self._voice_proc = None
 
@@ -295,16 +301,27 @@ class DashboardNode(Node):
             self.get_logger().error(f'Failed to launch vision: {e}')
 
     def _kill_vision(self):
-        """Kill the vision detection pipeline."""
+        """Kill the vision detection pipeline gracefully.
+
+        Uses SIGINT first (lets camera driver release cleanly),
+        then SIGTERM, then SIGKILL as last resort.
+        """
         if self._vision_proc is not None and self._vision_proc.poll() is None:
+            pid = self._vision_proc.pid
             try:
-                os.killpg(os.getpgid(self._vision_proc.pid), signal.SIGTERM)
-                self._vision_proc.wait(timeout=5)
-            except Exception:
+                pgid = os.getpgid(pid)
+                # SIGINT first — ROS2 launch handles this gracefully
+                os.killpg(pgid, signal.SIGINT)
                 try:
-                    os.killpg(os.getpgid(self._vision_proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
+                    self._vision_proc.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    os.killpg(pgid, signal.SIGTERM)
+                    try:
+                        self._vision_proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(pgid, signal.SIGKILL)
+            except Exception:
+                pass
             self.get_logger().info('Vision pipeline stopped')
         self._vision_proc = None
 
