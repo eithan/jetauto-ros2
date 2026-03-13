@@ -152,35 +152,31 @@ class DashboardNode(Node):
         self._emit_state()
 
     def _on_detections(self, msg):
-        """Append detected objects to the rolling log (max 5).
+        """Update detection state when detected labels change.
 
-        Throttled: only emits to the browser if the set of detected labels
-        actually changed, or at most once per second.
+        Uses a per-label dict so the same object detected repeatedly on
+        consecutive frames does NOT flood the browser with new entries.
+        Only emits a state update when the set of detected labels changes.
         """
         if not msg.objects:
             return
 
         ts = datetime.now().strftime('%H:%M:%S')
-        new_labels = set()
+
+        # Build per-label dict — keep best confidence per label in this frame
+        frame_dets: dict = {}
         for obj in msg.objects:
-            entry = {
-                'label': obj.label,
-                'confidence': round(obj.confidence, 2),
-                'time': ts,
-            }
-            new_labels.add(obj.label)
-            self.state['detections'].append(entry)
+            label = obj.label
+            conf = round(obj.confidence, 2)
+            if label not in frame_dets or conf > frame_dets[label]['confidence']:
+                frame_dets[label] = {'label': label, 'confidence': conf, 'time': ts}
 
-        # Keep last 5
-        self.state['detections'] = self.state['detections'][-5:]
+        new_labels = frozenset(frame_dets.keys())
+        old_labels = getattr(self, '_last_det_labels', frozenset())
 
-        # Throttle: only emit if labels changed or >1s since last emit
-        now = time.time()
-        old_labels = getattr(self, '_last_det_labels', set())
-        last_emit = getattr(self, '_last_det_emit', 0)
-        if new_labels != old_labels or (now - last_emit) > 1.0:
+        if new_labels != old_labels:
             self._last_det_labels = new_labels
-            self._last_det_emit = now
+            self.state['detections'] = list(frame_dets.values())[:5]
             self._emit_state()
 
     def _tick_uptime(self):

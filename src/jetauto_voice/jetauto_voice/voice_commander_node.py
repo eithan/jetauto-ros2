@@ -99,6 +99,7 @@ class VoiceCommanderNode(Node):
         self._detection_pub = self.create_publisher(Bool, "/jetauto/detection/enable", 1)
         self._target_pub = self.create_publisher(String, "/jetauto/detection/target", 1)
         self._tts_pub = self.create_publisher(String, "/tts/speak", 1)
+        self._voice_state_pub = self.create_publisher(String, "/jetauto/voice/state", 1)
 
         # -- State --
         self._shutdown_event = threading.Event()
@@ -274,9 +275,11 @@ class VoiceCommanderNode(Node):
            - 5-min timeout → END
         """
         # --- Greeting ---
+        self._pub_voice_state('speaking')
         self._speak_and_wait("Yes?")
         self._drain_stream(stream, 800)
         self._play_beep()
+        self._pub_voice_state('listening')
         self.get_logger().info("Session open — listening for commands")
 
         t0 = time.time()
@@ -295,10 +298,13 @@ class VoiceCommanderNode(Node):
                 continue
 
             # --- Transcribe ---
+            self._pub_voice_state('processing')
             text = self._transcribe(audio)
             if not text:
+                self._pub_voice_state('listening')
                 continue
             if text.lower().strip().rstrip("?.!,") in _HALLUCINATIONS:
+                self._pub_voice_state('listening')
                 continue
 
             self.get_logger().info(f'Heard: "{text}"')
@@ -306,19 +312,22 @@ class VoiceCommanderNode(Node):
             # --- Jarvis stop ---
             if self._is_stop_command(text):
                 self.get_logger().info("Jarvis stop — ending session")
+                self._pub_voice_state('speaking')
                 self._speak_and_wait("Okay.")
                 break
 
             # --- Dispatch intent ---
             end_session = self._dispatch_intent(text)
             if end_session:
-                # Detection was enabled — stop voice to avoid mic interference
-                self.get_logger().info("Detection active — ending voice session")
+                self.get_logger().info("Session ending after command")
                 break
 
             # Command executed, drain TTS echo then keep listening
             self._drain_stream(stream, 800)
             self._play_beep()
+            self._pub_voice_state('listening')
+
+        self._pub_voice_state('idle')
 
     # ================================================================== #
     # Speech capture (VAD only — no drains, no beeps)
@@ -453,20 +462,20 @@ class VoiceCommanderNode(Node):
     def _dispatch_intent(self, text: str) -> bool:
         """Execute a voice command. Returns True if session should end."""
 
-        # 1. Find object → enable detection + end session
+        # 1. Find object → announce only, no action (vision must be enabled separately)
         result = extract_target(text)
         if result is not None:
             yolo_label, raw_object = result
-            self.get_logger().info(f'Find "{raw_object}" → YOLO "{yolo_label}"')
-            self._pub_enable(True)
-            self._pub_target(yolo_label)
-            self._speak_and_wait(f"Looking for {raw_object}.")
-            return True   # end session — detection TTS will use mic
+            self.get_logger().info(f'Find intent (announce only): "{raw_object}"')
+            self._pub_voice_state('speaking')
+            self._speak_and_wait(f"I'll look for {raw_object} when detection is enabled.")
+            return False   # stay in session
 
         # 2. Enable detection → end session
         if is_enable_command(text):
             self.get_logger().info("Enable detection")
             self._pub_enable(True)
+            self._pub_voice_state('speaking')
             self._speak_and_wait("Detection enabled.")
             return True
 
@@ -474,12 +483,33 @@ class VoiceCommanderNode(Node):
         if is_disable_command(text):
             self.get_logger().info("Disable detection")
             self._pub_enable(False)
+            self._pub_voice_state('speaking')
             self._speak_and_wait("Detection disabled.")
             return False
 
-        # 4. Unmatched — silently ignore, keep listening
+        # 4. Disable voice → end session
+        if self._is_disable_voice_command(text):
+            self.get_logger().info("Disable voice — ending session")
+            self._pub_voice_state('speaking')
+            self._speak_and_wait("Voice disabled.")
+            return True
+
+        # 5. Unmatched — silently ignore, keep listening
         self.get_logger().info(f'No intent for: "{text}"')
         return False
+
+    def _pub_voice_state(self, state: str) -> None:
+        """Publish voice state to dashboard ('idle'|'listening'|'processing'|'speaking')."""
+        msg = String()
+        msg.data = state
+        self._voice_state_pub.publish(msg)
+        self.get_logger().debug(f'Voice state → {state}')
+
+    def _is_disable_voice_command(self, text: str) -> bool:
+        t = text.lower().strip()
+        return any(p in t for p in [
+            "disable voice", "turn off voice", "stop voice", "voice off",
+        ])
 
     def _pub_enable(self, on: bool) -> None:
         msg = Bool()
