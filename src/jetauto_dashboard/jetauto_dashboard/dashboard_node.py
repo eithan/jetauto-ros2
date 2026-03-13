@@ -152,18 +152,36 @@ class DashboardNode(Node):
         self._emit_state()
 
     def _on_detections(self, msg):
-        """Append detected objects to the rolling log (max 5)."""
+        """Append detected objects to the rolling log (max 5).
+
+        Throttled: only emits to the browser if the set of detected labels
+        actually changed, or at most once per second.
+        """
+        if not msg.objects:
+            return
+
         ts = datetime.now().strftime('%H:%M:%S')
+        new_labels = set()
         for obj in msg.objects:
             entry = {
                 'label': obj.label,
                 'confidence': round(obj.confidence, 2),
                 'time': ts,
             }
+            new_labels.add(obj.label)
             self.state['detections'].append(entry)
+
         # Keep last 5
         self.state['detections'] = self.state['detections'][-5:]
-        self._emit_state()
+
+        # Throttle: only emit if labels changed or >1s since last emit
+        now = time.time()
+        old_labels = getattr(self, '_last_det_labels', set())
+        last_emit = getattr(self, '_last_det_emit', 0)
+        if new_labels != old_labels or (now - last_emit) > 1.0:
+            self._last_det_labels = new_labels
+            self._last_det_emit = now
+            self._emit_state()
 
     def _tick_uptime(self):
         self.state['uptime'] = int(time.time() - self.start_time)
@@ -264,7 +282,7 @@ class DashboardNode(Node):
         self._voice_proc = None
 
     def _launch_vision(self):
-        """Launch the vision+TTS pipeline and enable detection."""
+        """Launch the vision+TTS pipeline (auto-enables detection via launch param)."""
         if self._vision_proc is not None and self._vision_proc.poll() is None:
             return  # already running
         try:
@@ -273,17 +291,6 @@ class DashboardNode(Node):
                 preexec_fn=os.setsid,
             )
             self.get_logger().info(f'Vision pipeline launched (pid {self._vision_proc.pid})')
-
-            # detector_node starts with detection disabled (start_enabled=False)
-            # Send enable after a delay to let the node activate
-            def _enable_after_launch():
-                time.sleep(8)  # wait for YOLO model to load + lifecycle activate
-                msg = Bool()
-                msg.data = True
-                self.pub_vision_enable.publish(msg)
-                self.get_logger().info('Detection enabled after vision launch')
-            threading.Thread(target=_enable_after_launch, daemon=True).start()
-
         except Exception as e:
             self.get_logger().error(f'Failed to launch vision: {e}')
 
@@ -407,6 +414,12 @@ def create_app(node: DashboardNode):
 
     @socketio.on('request_state')
     def on_request_state():
+        socketio.emit('state', node.state)
+
+    @socketio.on('refresh_stats')
+    def on_refresh_stats():
+        """Force an immediate sysfs read and push to browser."""
+        node._poll_system()
         socketio.emit('state', node.state)
 
     @socketio.on('quit')

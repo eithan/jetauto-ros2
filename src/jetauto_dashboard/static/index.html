@@ -246,6 +246,16 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.stat-card:active {
+  background: rgba(40, 58, 82, 0.9);
+  border-color: rgba(92, 224, 255, 0.4);
+}
+.stat-card.refreshing .stat-value {
+  opacity: 0.5;
+  transition: opacity 0.15s;
 }
 
 .stat-label {
@@ -569,7 +579,7 @@ html, body {
 
       <div class="status-grid">
         <!-- Battery -->
-        <div class="stat-card">
+        <div class="stat-card" onclick="refreshStat(this)">
           <div class="stat-label">
             <span class="status-dot" id="batteryDot"></span>
             🔋 Battery
@@ -582,7 +592,7 @@ html, body {
         </div>
 
         <!-- Uptime -->
-        <div class="stat-card">
+        <div class="stat-card" onclick="refreshStat(this)">
           <div class="stat-label">
             <span class="status-dot connected"></span>
             ⏱ Uptime
@@ -591,7 +601,7 @@ html, body {
         </div>
 
         <!-- CPU Temp -->
-        <div class="stat-card">
+        <div class="stat-card" onclick="refreshStat(this)">
           <div class="stat-label">
             <span class="status-dot" id="cpuDot"></span>
             🌡 CPU Temp
@@ -600,7 +610,7 @@ html, body {
         </div>
 
         <!-- GPU Temp -->
-        <div class="stat-card">
+        <div class="stat-card" onclick="refreshStat(this)">
           <div class="stat-label">
             <span class="status-dot" id="gpuDot"></span>
             🎮 GPU Temp
@@ -806,15 +816,24 @@ function updateVoiceState(state) {
   setMouthState(state);
 }
 
+let _lastDetectionsKey = '';
 function updateDetections(dets) {
   const list = document.getElementById('detectionList');
   const dot = document.getElementById('detDot');
 
   if (!dets || dets.length === 0) {
-    list.innerHTML = '<li class="detection-empty">No detections yet</li>';
+    if (_lastDetectionsKey !== 'empty') {
+      list.innerHTML = '<li class="detection-empty">No detections yet</li>';
+      _lastDetectionsKey = 'empty';
+    }
     dot.className = 'status-dot';
     return;
   }
+
+  // Only re-render if content actually changed
+  const key = dets.map(d => d.label + d.confidence + d.time).join('|');
+  if (key === _lastDetectionsKey) return;
+  _lastDetectionsKey = key;
 
   dot.className = 'status-dot connected';
   list.innerHTML = dets.map(d =>
@@ -872,6 +891,13 @@ function handleShutdown() {
     btn.style.pointerEvents = 'none';
     socket.emit('shutdown');
   }
+}
+
+// ── Tap to refresh stat ───────────────────────────────
+function refreshStat(card) {
+  card.classList.add('refreshing');
+  socket.emit('refresh_stats');
+  setTimeout(() => card.classList.remove('refreshing'), 600);
 }
 
 // ── Close dashboard ───────────────────────────────────
