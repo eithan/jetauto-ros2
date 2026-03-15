@@ -24,6 +24,8 @@ Type=simple
 User=ubuntu
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/ubuntu/.Xauthority
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
 Environment=DASHBOARD_PORT=5000
 WorkingDirectory=/home/ubuntu/ros2_ws/src/jetauto-ros2
 ExecStart=/home/ubuntu/ros2_ws/src/jetauto-ros2/scripts/start-dashboard.sh --kiosk
