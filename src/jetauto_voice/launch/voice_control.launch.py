@@ -29,21 +29,21 @@ def generate_launch_description():
         'wake_word_threshold', default_value='0.5',
     )
     stt_model_size_arg = DeclareLaunchArgument(
-        'stt_model_size', default_value='base.en',
+        'stt_model_size', default_value='small.en',
         description='tiny.en (fast/poor) | base.en (balanced) | small.en (slow/good)',
     )
     stt_device_arg = DeclareLaunchArgument(
-        'stt_device', default_value='cpu',
+        'stt_device', default_value='cuda',
     )
     stt_compute_type_arg = DeclareLaunchArgument(
-        'stt_compute_type', default_value='int8',
+        'stt_compute_type', default_value='float16',
     )
     mic_device_index_arg = DeclareLaunchArgument(
         'mic_device_index', default_value='1',
         description='1=XFM-DP (JetAuto mic), 2=USB Audio, -1=system default',
     )
     vad_aggressiveness_arg = DeclareLaunchArgument(
-        'vad_aggressiveness', default_value='2',
+        'vad_aggressiveness', default_value='1',
         description='0=permissive … 3=strict',
     )
     vad_listen_timeout_sec_arg = DeclareLaunchArgument(
