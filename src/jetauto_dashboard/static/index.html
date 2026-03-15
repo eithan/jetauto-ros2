@@ -672,10 +672,10 @@ socket.on('state', (s) => {
   voiceEnabled  = s.voice_enabled;
   visionEnabled = s.vision_enabled;
   syncToggles();
-  // Voice overlay: close when voice pipeline signals it's actually running
-  // (voice_state goes non-idle means OWW+Whisper loaded and wake word is active)
+  // Voice overlay: close when voice pipeline signals it's ready
+  // (voice_commander publishes 'ready' once OWW+Whisper loaded and audio loop starts)
   if (_startupMode === 'voice' && s.voice_state && s.voice_state !== 'idle') {
-    hideStartupOverlay(500);
+    hideStartupOverlay(800);
   }
   // Vision overlay: vision_enabled flips true immediately on the server before
   // YOLO has loaded — enforce a minimum display time so overlay is always visible

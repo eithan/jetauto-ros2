@@ -369,10 +369,13 @@ class DashboardNode(Node):
 
     def _maybe_kill_tts(self):
         """Kill tts_node only if neither voice nor vision needs it."""
-        voice_alive = self._proc_alive(self._voice_proc)
-        detector_alive = self._proc_alive(self._detector_proc)
-        if not voice_alive and not detector_alive:
+        if not self.state.get('voice_enabled') and not self.state.get('vision_enabled'):
             self._kill_tts()
+
+    def _maybe_kill_detector(self):
+        """Kill detector_node only if neither voice nor vision needs it."""
+        if not self.state.get('voice_enabled') and not self.state.get('vision_enabled'):
+            self._kill_detector()
 
     def cleanup_subprocesses(self):
         """Kill any managed subprocesses on shutdown."""
@@ -390,11 +393,13 @@ class DashboardNode(Node):
         self._emit_state()
 
         if enabled:
-            self._launch_tts()    # TTS needed for voice feedback ("Yes?", etc.)
+            self._launch_tts()       # TTS needed for voice feedback ("Yes?", etc.)
+            self._launch_detector()  # Detector needed for "find X" / "start detection"
             self._launch_voice()
         else:
             self._kill_voice()
-            self._maybe_kill_tts()  # only kill TTS if vision also off
+            self._maybe_kill_detector()  # only kill if vision also off
+            self._maybe_kill_tts()       # only kill if vision also off
 
         self.get_logger().info(f'Voice {"enabled" if enabled else "disabled"}')
 
@@ -417,8 +422,8 @@ class DashboardNode(Node):
                     self.pub_vision_enable.publish(msg)
             threading.Thread(target=_re_enable, daemon=True).start()
         else:
-            self._kill_detector()
-            self._maybe_kill_tts()   # only kill TTS if voice also off
+            self._maybe_kill_detector()  # only kill if voice also off
+            self._maybe_kill_tts()       # only kill TTS if voice also off
 
         self.get_logger().info(f'Vision {"enabled" if enabled else "disabled"}')
 

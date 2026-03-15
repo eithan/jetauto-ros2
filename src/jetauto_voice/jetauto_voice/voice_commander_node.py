@@ -230,6 +230,11 @@ class VoiceCommanderNode(Node):
             f"Audio loop started — {self._sample_rate}Hz, device={device}"
         )
 
+        # Signal dashboard that voice pipeline is ready (dismisses loading overlay)
+        self._pub_voice_state('ready')
+        time.sleep(0.1)
+        self._pub_voice_state('idle')
+
         with sd.InputStream(
             samplerate=self._sample_rate, channels=1, dtype="int16",
             blocksize=_OWW_CHUNK_SAMPLES, device=device,
