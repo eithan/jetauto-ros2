@@ -408,6 +408,14 @@ class DashboardNode(Node):
         if enabled:
             self._launch_tts()       # TTS needed for announcements
             self._launch_detector()
+            # Re-publish enable after detector has time to subscribe.
+            # vision_launch.py sets start_enabled=True, but this is
+            # belt-and-suspenders in case the param is overridden.
+            def _re_enable():
+                time.sleep(15)
+                if self.state.get('vision_enabled'):
+                    self.pub_vision_enable.publish(msg)
+            threading.Thread(target=_re_enable, daemon=True).start()
         else:
             self._kill_detector()
             self._maybe_kill_tts()   # only kill TTS if voice also off

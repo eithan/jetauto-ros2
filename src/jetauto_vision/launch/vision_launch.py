@@ -28,7 +28,7 @@ def generate_launch_description():
         executable='detector_node',
         name='detector_node',
         namespace='',
-        parameters=[config],
+        parameters=[config, {'start_enabled': True}],
         output='screen',
         emulate_tty=True,
     )
