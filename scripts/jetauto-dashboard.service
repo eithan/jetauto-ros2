@@ -29,6 +29,9 @@ WorkingDirectory=/home/ubuntu/ros2_ws/src/jetauto-ros2
 ExecStart=/home/ubuntu/ros2_ws/src/jetauto-ros2/scripts/start-dashboard.sh --kiosk
 Restart=on-failure
 RestartSec=5
+KillMode=control-group
+KillSignal=SIGINT
+TimeoutStopSec=15
 
 [Install]
 WantedBy=graphical.target
