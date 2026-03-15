@@ -46,8 +46,11 @@ class DashboardNode(Node):
         self.declare_parameter('shutdown_command', 'sudo /sbin/poweroff')
 
         # -- Managed subprocess handles --
-        self._voice_proc = None
-        self._vision_proc = None
+        # Each node group is managed independently to avoid lifecycle
+        # collisions when voice and vision are toggled separately.
+        self._voice_proc = None     # voice_commander_node only
+        self._detector_proc = None  # detector_node only
+        self._tts_proc = None       # tts_node only (shared by voice & vision)
 
         # -- State --
         self.state = {
@@ -274,84 +277,108 @@ class DashboardNode(Node):
         except AttributeError:
             pass  # socketio.server not initialized yet
 
-    # ── Process management (launch/kill voice & vision nodes) ──────
+    # ── Process management (launch/kill individual node groups) ─────
+    #
+    # Three independent processes avoid the lifecycle collision that
+    # occurred when voice_control.launch.py bundled detector_node +
+    # tts_node alongside voice_commander_node, and then tts_launch.py
+    # tried to start duplicate detector_node + tts_node instances.
+
+    @staticmethod
+    def _proc_alive(proc):
+        """Return True if a subprocess handle is running."""
+        return proc is not None and proc.poll() is None
+
+    def _kill_proc(self, proc, label: str):
+        """Kill a subprocess gracefully: SIGINT → SIGTERM → SIGKILL."""
+        if not self._proc_alive(proc):
+            return
+        pid = proc.pid
+        try:
+            pgid = os.getpgid(pid)
+            os.killpg(pgid, signal.SIGINT)
+            try:
+                proc.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                os.killpg(pgid, signal.SIGTERM)
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(pgid, signal.SIGKILL)
+        except Exception:
+            pass
+        self.get_logger().info(f'{label} stopped')
+
+    # -- Voice commander --
 
     def _launch_voice(self):
-        """Launch the voice control pipeline via ros2 launch."""
-        if self._voice_proc is not None and self._voice_proc.poll() is None:
-            return  # already running
+        """Launch voice_commander_node only."""
+        if self._proc_alive(self._voice_proc):
+            return
         try:
             self._voice_proc = subprocess.Popen(
                 ['ros2', 'launch', 'jetauto_voice', 'voice_control.launch.py',
                  'mic_device_index:=1', 'vad_aggressiveness:=2'],
                 preexec_fn=os.setsid,
             )
-            self.get_logger().info(f'Voice pipeline launched (pid {self._voice_proc.pid})')
+            self.get_logger().info(f'Voice commander launched (pid {self._voice_proc.pid})')
         except Exception as e:
-            self.get_logger().error(f'Failed to launch voice: {e}')
+            self.get_logger().error(f'Failed to launch voice commander: {e}')
 
     def _kill_voice(self):
-        """Kill the voice control pipeline gracefully."""
-        if self._voice_proc is not None and self._voice_proc.poll() is None:
-            pid = self._voice_proc.pid
-            try:
-                pgid = os.getpgid(pid)
-                os.killpg(pgid, signal.SIGINT)
-                try:
-                    self._voice_proc.wait(timeout=8)
-                except subprocess.TimeoutExpired:
-                    os.killpg(pgid, signal.SIGTERM)
-                    try:
-                        self._voice_proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(pgid, signal.SIGKILL)
-            except Exception:
-                pass
-            self.get_logger().info('Voice pipeline stopped')
+        self._kill_proc(self._voice_proc, 'Voice commander')
         self._voice_proc = None
 
-    def _launch_vision(self):
-        """Launch the vision+TTS pipeline (auto-enables detection via launch param)."""
-        if self._vision_proc is not None and self._vision_proc.poll() is None:
-            return  # already running
+    # -- Detector --
+
+    def _launch_detector(self):
+        """Launch detector_node only (via vision_launch.py)."""
+        if self._proc_alive(self._detector_proc):
+            return
         try:
-            self._vision_proc = subprocess.Popen(
-                ['ros2', 'launch', 'jetauto_tts', 'tts_launch.py'],
+            self._detector_proc = subprocess.Popen(
+                ['ros2', 'launch', 'jetauto_vision', 'vision_launch.py'],
                 preexec_fn=os.setsid,
             )
-            self.get_logger().info(f'Vision pipeline launched (pid {self._vision_proc.pid})')
+            self.get_logger().info(f'Detector launched (pid {self._detector_proc.pid})')
         except Exception as e:
-            self.get_logger().error(f'Failed to launch vision: {e}')
+            self.get_logger().error(f'Failed to launch detector: {e}')
 
-    def _kill_vision(self):
-        """Kill the vision detection pipeline gracefully.
+    def _kill_detector(self):
+        self._kill_proc(self._detector_proc, 'Detector')
+        self._detector_proc = None
 
-        Uses SIGINT first (lets camera driver release cleanly),
-        then SIGTERM, then SIGKILL as last resort.
-        """
-        if self._vision_proc is not None and self._vision_proc.poll() is None:
-            pid = self._vision_proc.pid
-            try:
-                pgid = os.getpgid(pid)
-                # SIGINT first — ROS2 launch handles this gracefully
-                os.killpg(pgid, signal.SIGINT)
-                try:
-                    self._vision_proc.wait(timeout=8)
-                except subprocess.TimeoutExpired:
-                    os.killpg(pgid, signal.SIGTERM)
-                    try:
-                        self._vision_proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(pgid, signal.SIGKILL)
-            except Exception:
-                pass
-            self.get_logger().info('Vision pipeline stopped')
-        self._vision_proc = None
+    # -- TTS (shared resource) --
+
+    def _launch_tts(self):
+        """Launch tts_node only (via tts_only.launch.py)."""
+        if self._proc_alive(self._tts_proc):
+            return
+        try:
+            self._tts_proc = subprocess.Popen(
+                ['ros2', 'launch', 'jetauto_tts', 'tts_only.launch.py'],
+                preexec_fn=os.setsid,
+            )
+            self.get_logger().info(f'TTS launched (pid {self._tts_proc.pid})')
+        except Exception as e:
+            self.get_logger().error(f'Failed to launch TTS: {e}')
+
+    def _kill_tts(self):
+        self._kill_proc(self._tts_proc, 'TTS')
+        self._tts_proc = None
+
+    def _maybe_kill_tts(self):
+        """Kill tts_node only if neither voice nor vision needs it."""
+        voice_alive = self._proc_alive(self._voice_proc)
+        detector_alive = self._proc_alive(self._detector_proc)
+        if not voice_alive and not detector_alive:
+            self._kill_tts()
 
     def cleanup_subprocesses(self):
         """Kill any managed subprocesses on shutdown."""
         self._kill_voice()
-        self._kill_vision()
+        self._kill_detector()
+        self._kill_tts()
 
     # ── Command handlers (from browser) ────────────────────────────
 
@@ -363,9 +390,11 @@ class DashboardNode(Node):
         self._emit_state()
 
         if enabled:
+            self._launch_tts()    # TTS needed for voice feedback ("Yes?", etc.)
             self._launch_voice()
         else:
             self._kill_voice()
+            self._maybe_kill_tts()  # only kill TTS if vision also off
 
         self.get_logger().info(f'Voice {"enabled" if enabled else "disabled"}')
 
@@ -377,9 +406,11 @@ class DashboardNode(Node):
         self._emit_state()
 
         if enabled:
-            self._launch_vision()
+            self._launch_tts()       # TTS needed for announcements
+            self._launch_detector()
         else:
-            self._kill_vision()
+            self._kill_detector()
+            self._maybe_kill_tts()   # only kill TTS if voice also off
 
         self.get_logger().info(f'Vision {"enabled" if enabled else "disabled"}')
 

@@ -1,23 +1,20 @@
 """
-Launch file for JetAuto voice control + vision detection + TTS.
+Launch file for JetAuto voice commander (wake word + STT + intent).
+
+Only launches voice_commander_node. The detector_node and tts_node are
+managed separately by the dashboard to avoid lifecycle collisions when
+voice and vision are toggled independently.
 
 Usage::
 
     ros2 launch jetauto_voice voice_control.launch.py
 """
 
-import os
-
-import launch
-import lifecycle_msgs.msg
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import LifecycleNode, Node
-from launch_ros.event_handlers import OnStateTransition
-from launch_ros.events.lifecycle import ChangeState
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
@@ -91,48 +88,6 @@ def generate_launch_description():
         condition=IfCondition(use_iflytek),
     )
 
-    # -- Detector (lifecycle) --
-    vision_config = os.path.join(
-        get_package_share_directory('jetauto_vision'), 'config', 'vision_params.yaml',
-    )
-    detector = LifecycleNode(
-        package='jetauto_vision', executable='detector_node',
-        name='detector_node', namespace='',
-        parameters=[vision_config], output='screen', emulate_tty=True,
-    )
-    det_cfg = launch.actions.EmitEvent(event=ChangeState(
-        lifecycle_node_matcher=launch.events.matches_action(detector),
-        transition_id=lifecycle_msgs.msg.Transition.TRANSITION_CONFIGURE,
-    ))
-    det_act = launch.actions.RegisterEventHandler(OnStateTransition(
-        target_lifecycle_node=detector, goal_state='inactive',
-        entities=[launch.actions.EmitEvent(event=ChangeState(
-            lifecycle_node_matcher=launch.events.matches_action(detector),
-            transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
-        ))],
-    ))
-
-    # -- TTS (lifecycle) --
-    tts_config = os.path.join(
-        get_package_share_directory('jetauto_tts'), 'config', 'tts_params.yaml',
-    )
-    tts = LifecycleNode(
-        package='jetauto_tts', executable='tts_node',
-        name='tts_node', namespace='',
-        parameters=[tts_config], output='screen', emulate_tty=True,
-    )
-    tts_cfg = launch.actions.EmitEvent(event=ChangeState(
-        lifecycle_node_matcher=launch.events.matches_action(tts),
-        transition_id=lifecycle_msgs.msg.Transition.TRANSITION_CONFIGURE,
-    ))
-    tts_act = launch.actions.RegisterEventHandler(OnStateTransition(
-        target_lifecycle_node=tts, goal_state='inactive',
-        entities=[launch.actions.EmitEvent(event=ChangeState(
-            lifecycle_node_matcher=launch.events.matches_action(tts),
-            transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
-        ))],
-    ))
-
     return LaunchDescription([
         use_iflytek_arg,
         wake_word_model_arg, wake_word_threshold_arg,
@@ -140,7 +95,5 @@ def generate_launch_description():
         mic_device_index_arg, vad_aggressiveness_arg,
         vad_listen_timeout_sec_arg, vad_speech_end_frames_arg,
         wake_cooldown_sec_arg,
-        detector, det_cfg, det_act,
         voice_commander, voice_control,
-        tts, tts_cfg, tts_act,
     ])
