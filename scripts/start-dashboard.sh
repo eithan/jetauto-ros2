@@ -69,12 +69,23 @@ cleanup() {
   CLEANING_UP=true
   echo ""
   echo "🛑 Shutting down dashboard..."
-  kill "$ROS_PID" 2>/dev/null || true
-  # Kill any browser we launched
-  if [ -n "${BROWSER_PID:-}" ]; then
-    kill "$BROWSER_PID" 2>/dev/null || true
+
+  # Kill the ROS2 launch process group
+  if [ -n "${ROS_PID:-}" ]; then
+    kill -INT "$ROS_PID" 2>/dev/null || true
+    sleep 1
+    kill -9 "$ROS_PID" 2>/dev/null || true
   fi
-  wait 2>/dev/null
+
+  # Kill Chromium (spawns multiple processes, kill by name)
+  pkill -f "chromium.*${DASHBOARD_URL}" 2>/dev/null || true
+  killall -9 chromium-browser 2>/dev/null || true
+
+  # Kill anything still holding our port
+  kill -9 $(lsof -ti:${DASHBOARD_PORT}) 2>/dev/null || true
+
+  # Don't wait — just exit
+  exit 0
 }
 trap cleanup EXIT INT TERM
 
