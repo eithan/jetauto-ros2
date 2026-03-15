@@ -393,13 +393,11 @@ class DashboardNode(Node):
         self._emit_state()
 
         if enabled:
-            self._launch_tts()       # TTS needed for voice feedback ("Yes?", etc.)
-            self._launch_detector()  # Detector needed for "find X" / "start detection"
+            self._launch_tts()    # TTS needed for voice feedback ("Yes?", etc.)
             self._launch_voice()
         else:
             self._kill_voice()
-            self._maybe_kill_detector()  # only kill if vision also off
-            self._maybe_kill_tts()       # only kill if vision also off
+            self._maybe_kill_tts()  # only kill TTS if vision also off
 
         self.get_logger().info(f'Voice {"enabled" if enabled else "disabled"}')
 
