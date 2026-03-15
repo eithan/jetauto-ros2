@@ -13,7 +13,7 @@
 set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-WS_DIR="${SCRIPT_DIR}/../.."          # ~/ros2_ws
+WS_DIR="${SCRIPT_DIR}/../../.."        # ~/ros2_ws (scripts → jetauto-ros2 → src → ros2_ws)
 DASHBOARD_PORT="${DASHBOARD_PORT:-5000}"
 DASHBOARD_URL="http://localhost:${DASHBOARD_PORT}"
 BROWSER_DELAY=4                        # seconds to wait before opening browser
