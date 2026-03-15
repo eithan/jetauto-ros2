@@ -40,9 +40,12 @@ class TTSNode(LifecycleNode):
         self.declare_parameter('announce_new_only', True)
         self.declare_parameter('scene_forget_timeout', 30.0)  # seconds before resetting known labels
         self.declare_parameter('greeting', 'I can see')
+        self.declare_parameter('announce_detections', True)
+        self.declare_parameter('caption_greeting', 'I can see')
 
         # -- State --
         self.last_announcement_time = 0.0
+        self._caption_active = False  # set True when first caption arrives
         # Per-label state: {label: {'last_seen': float, 'count': int, 'announced_count': int}}
         # Replaces the old flat set — tracks instance counts and per-label expiry.
         self._label_state: dict = {}
@@ -87,6 +90,9 @@ class TTSNode(LifecycleNode):
         self.sub_manual = self.create_subscription(
             String, '/tts/speak', self._manual_speak_callback, 10
         )
+        self.sub_caption = self.create_subscription(
+            String, '/scene_caption', self._caption_callback, 1
+        )
         # Publish speaking state so the voice commander can mute the mic
         self._speaking_pub = self.create_publisher(Bool, '/tts/speaking', 1)
         # Publish voice state so the dashboard face animates during TTS.
@@ -107,6 +113,8 @@ class TTSNode(LifecycleNode):
             self.destroy_subscription(self.sub_detections)
         if hasattr(self, 'sub_manual'):
             self.destroy_subscription(self.sub_manual)
+        if hasattr(self, 'sub_caption'):
+            self.destroy_subscription(self.sub_caption)
         self.get_logger().info('Deactivated')
         return super().on_deactivate(state)
 
@@ -139,6 +147,8 @@ class TTSNode(LifecycleNode):
         self.announce_new_only = self.get_parameter('announce_new_only').value
         self.scene_forget_timeout = self.get_parameter('scene_forget_timeout').value
         self.greeting = self.get_parameter('greeting').value
+        self.announce_detections = self.get_parameter('announce_detections').value
+        self.caption_greeting = self.get_parameter('caption_greeting').value
 
     # ------------------------------------------------------------------ #
     # TTS engine
@@ -222,10 +232,47 @@ class TTSNode(LifecycleNode):
     # Detection callback
     # ------------------------------------------------------------------ #
 
+    def _caption_callback(self, msg: String):
+        """Speak a scene caption from Florence-2.
+
+        Replaces YOLO detection announcements with natural-language
+        descriptions when the caption pipeline is active.
+        """
+        text = msg.data.strip()
+        if not text:
+            return
+
+        # Mark caption pipeline as active — suppresses YOLO announcements
+        self._caption_active = True
+
+        # Strip common third-person prefixes and convert to first-person
+        for prefix in (
+            'The image shows ', 'The image depicts ', 'The image features ',
+            'In this image, ', 'In the image, ', 'This image shows ',
+            'The picture shows ', 'The photo shows ',
+        ):
+            if text.startswith(prefix):
+                text = text[len(prefix):]
+                break
+            lower = text.lower()
+            if lower.startswith(prefix.lower()):
+                text = text[len(prefix):]
+                break
+
+        # Capitalize first letter and prepend greeting
+        if text:
+            text = text[0].upper() + text[1:] if len(text) > 1 else text.upper()
+
+        announcement = f'{self.caption_greeting} {text}' if self.caption_greeting else text
+
+        self.get_logger().info(f'Scene caption: "{announcement}"')
+        self._enqueue_speech(announcement)
+
     def _detection_callback(self, msg: DetectedObjectArray):
         """Process detected objects and announce them.
 
         Announcement logic:
+        - Suppressed when Florence-2 caption pipeline is active.
         - A label is announced when first seen (announced_count == 0).
         - It is announced again when the instance count increases
           (e.g. 1 person → 2 people in frame simultaneously).
@@ -237,6 +284,10 @@ class TTSNode(LifecycleNode):
           decisions still respect self.cooldown.
         """
         now = time.time()
+
+        # Skip YOLO announcements when Florence-2 captions are active
+        if self._caption_active or not self.announce_detections:
+            return
 
         if not msg.objects:
             return

@@ -51,6 +51,7 @@ class DashboardNode(Node):
         self._voice_proc = None     # voice_commander_node only
         self._detector_proc = None  # detector_node only
         self._tts_proc = None       # tts_node only (shared by voice & vision)
+        self._caption_proc = None   # caption_node (Florence-2, vision only)
 
         # -- State --
         self.state = {
@@ -377,10 +378,30 @@ class DashboardNode(Node):
         if not self.state.get('voice_enabled') and not self.state.get('vision_enabled'):
             self._kill_detector()
 
+    # -- Caption (Florence-2, vision only) --
+
+    def _launch_caption(self):
+        """Launch caption_node (Florence-2 scene captioning)."""
+        if self._proc_alive(self._caption_proc):
+            return
+        try:
+            self._caption_proc = subprocess.Popen(
+                ['ros2', 'launch', 'jetauto_vision', 'caption_launch.py'],
+                preexec_fn=os.setsid,
+            )
+            self.get_logger().info(f'Caption launched (pid {self._caption_proc.pid})')
+        except Exception as e:
+            self.get_logger().error(f'Failed to launch caption: {e}')
+
+    def _kill_caption(self):
+        self._kill_proc(self._caption_proc, 'Caption')
+        self._caption_proc = None
+
     def cleanup_subprocesses(self):
         """Kill any managed subprocesses on shutdown."""
         self._kill_voice()
         self._kill_detector()
+        self._kill_caption()
         self._kill_tts()
 
     # ── Command handlers (from browser) ────────────────────────────
@@ -411,6 +432,7 @@ class DashboardNode(Node):
         if enabled:
             self._launch_tts()       # TTS needed for announcements
             self._launch_detector()
+            self._launch_caption()   # Florence-2 scene captioning
             # Re-publish enable after detector has time to subscribe.
             # vision_launch.py sets start_enabled=True, but this is
             # belt-and-suspenders in case the param is overridden.
@@ -420,6 +442,7 @@ class DashboardNode(Node):
                     self.pub_vision_enable.publish(msg)
             threading.Thread(target=_re_enable, daemon=True).start()
         else:
+            self._kill_caption()         # caption only runs with vision
             self._maybe_kill_detector()  # only kill if voice also off
             self._maybe_kill_tts()       # only kill TTS if voice also off
 

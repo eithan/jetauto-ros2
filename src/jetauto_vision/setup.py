@@ -24,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'detector_node = jetauto_vision.detector_node:main',
+            'caption_node = jetauto_vision.caption_node:main',
         ],
     },
 )
