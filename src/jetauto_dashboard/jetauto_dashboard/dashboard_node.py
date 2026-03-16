@@ -36,7 +36,7 @@ class DashboardNode(Node):
     def __init__(self, socketio: SocketIO):
         super().__init__('dashboard_node')
         self.socketio = socketio
-        self.start_time = time.time()
+        self.start_time = time.monotonic()
 
         # -- Parameters --
         self.declare_parameter('port', 5000)
@@ -244,7 +244,7 @@ class DashboardNode(Node):
             self._emit_state()
 
     def _tick_uptime(self):
-        self.state['uptime'] = int(time.time() - self.start_time)
+        self.state['uptime'] = int(time.monotonic() - self.start_time)
         # Emit every 5 seconds to avoid flooding
         if self.state['uptime'] % 5 == 0:
             self._emit_state()
