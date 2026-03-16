@@ -133,10 +133,43 @@ class DashboardNode(Node):
     def _on_battery_mv(self, msg: Float32):
         """Convert millivolts from robot controller to battery percentage.
 
-        3S LiPo: 9.0V (0%) to 12.6V (100%).
+        3S LiPo non-linear discharge curve (per-cell voltages × 3):
+          4.20V = 100%    (12.60V pack)
+          4.10V =  90%    (12.30V)
+          3.95V =  75%    (11.85V)
+          3.80V =  55%    (11.40V)
+          3.70V =  35%    (11.10V)
+          3.60V =  20%    (10.80V)
+          3.50V =  10%    (10.50V)
+          3.40V =   5%    (10.20V)
+          3.30V =   2%    ( 9.90V)  ← BMS starts beeping here
+          3.00V =   0%    ( 9.00V)
         """
         voltage = msg.data / 1000.0
-        pct = max(0, min(100, int((voltage - 9.0) / (12.6 - 9.0) * 100)))
+
+        # Piecewise-linear interpolation from real LiPo discharge curve
+        # (pack_voltage, percentage) pairs
+        curve = [
+            (12.60, 100), (12.30, 90), (11.85, 75), (11.40, 55),
+            (11.10, 35), (10.80, 20), (10.50, 10), (10.20, 5),
+            (9.90, 2), (9.00, 0),
+        ]
+
+        if voltage >= curve[0][0]:
+            pct = 100
+        elif voltage <= curve[-1][0]:
+            pct = 0
+        else:
+            for i in range(len(curve) - 1):
+                v_hi, p_hi = curve[i]
+                v_lo, p_lo = curve[i + 1]
+                if voltage >= v_lo:
+                    # Linear interpolation within this segment
+                    ratio = (voltage - v_lo) / (v_hi - v_lo)
+                    pct = int(p_lo + ratio * (p_hi - p_lo))
+                    break
+            else:
+                pct = 0
         self.state['battery'] = float(pct)
         self.state['battery_voltage'] = round(voltage, 2)
         self._emit_state()
