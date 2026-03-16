@@ -61,6 +61,7 @@ class DashboardNode(Node):
             'gpu_temp': None,
             'voice_enabled': False,
             'vision_enabled': False,
+            'caption_enabled': False,
             'voice_state': 'idle',  # idle | listening | processing | speaking
             'detections': [],       # last 5 detected objects
             'uptime': 0,
@@ -105,6 +106,9 @@ class DashboardNode(Node):
         # Mirror /tts/speaking (Bool) → voice_state as an additional reliability layer
         self.create_subscription(
             Bool, '/tts/speaking', self._on_tts_speaking, qos_reliable)
+        # Florence-2 scene captions → TTS
+        self.create_subscription(
+            String, '/scene_caption', self._on_scene_caption, qos_best_effort)
 
         if HAS_DETECTION_MSGS:
             self.create_subscription(
@@ -214,6 +218,14 @@ class DashboardNode(Node):
         elif self.state['voice_state'] == 'speaking':
             self.state['voice_state'] = 'idle'
             self._emit_state()
+
+    def _on_scene_caption(self, msg: String):
+        """Forward Florence-2 captions to TTS when caption is enabled."""
+        if not msg.data or not self.state.get('caption_enabled'):
+            return
+        tts_msg = String()
+        tts_msg.data = msg.data
+        self.pub_tts.publish(tts_msg)
 
     def _on_detections(self, msg):
         """Update detection state when detected labels change.
@@ -465,7 +477,6 @@ class DashboardNode(Node):
         if enabled:
             self._launch_tts()       # TTS needed for announcements
             self._launch_detector()
-            self._launch_caption()   # Florence-2 scene captioning
             # Re-publish enable after detector has time to subscribe.
             # vision_launch.py sets start_enabled=True, but this is
             # belt-and-suspenders in case the param is overridden.
@@ -475,11 +486,30 @@ class DashboardNode(Node):
                     self.pub_vision_enable.publish(msg)
             threading.Thread(target=_re_enable, daemon=True).start()
         else:
-            self._kill_caption()         # caption only runs with vision
+            # Kill caption when vision goes off — can't caption without camera
+            if self.state.get('caption_enabled'):
+                self._kill_caption()
+                self.state['caption_enabled'] = False
+                self._emit_state()
             self._maybe_kill_detector()  # only kill if voice also off
             self._maybe_kill_tts()       # only kill TTS if voice also off
 
         self.get_logger().info(f'Vision {"enabled" if enabled else "disabled"}')
+
+    def toggle_caption(self, enabled: bool):
+        """Toggle Florence-2 scene captioning independently of YOLO."""
+        # Caption requires vision to be on (needs the camera feed)
+        if enabled and not self.state.get('vision_enabled'):
+            self.get_logger().warn('Caption requested but vision is off — ignoring')
+            return
+        self.state['caption_enabled'] = enabled
+        self._emit_state()
+        if enabled:
+            self._launch_tts()    # TTS needed to speak captions
+            self._launch_caption()
+        else:
+            self._kill_caption()
+        self.get_logger().info(f'Caption {"enabled" if enabled else "disabled"}')
 
     def request_shutdown(self):
         msg = Bool()
@@ -541,6 +571,10 @@ def create_app(node: DashboardNode):
     @socketio.on('toggle_vision')
     def on_toggle_vision(data):
         node.toggle_vision(data.get('enabled', False))
+
+    @socketio.on('toggle_caption')
+    def on_toggle_caption(data):
+        node.toggle_caption(data.get('enabled', False))
 
     @socketio.on('shutdown')
     def on_shutdown():

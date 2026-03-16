@@ -578,6 +578,13 @@ html, body {
 
     <div class="control-sep"></div>
 
+    <div class="toggle-group" id="captionGroup">
+      <span class="toggle-label">🔍 Caption</span>
+      <div class="toggle-switch" id="captionToggle" onclick="toggleCaption()"></div>
+    </div>
+
+    <div class="control-sep"></div>
+
     <button class="shutdown-btn" id="shutdownBtn" onclick="handleShutdown()">
       <span>⏻</span> Shutdown
     </button>
@@ -602,8 +609,9 @@ html, body {
 <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
 <script>
 // ── State ─────────────────────────────────────────────
-let voiceEnabled = false;
-let visionEnabled = false;
+let voiceEnabled   = false;
+let visionEnabled  = false;
+let captionEnabled = false;
 let shutdownPending = false;
 let shutdownTimer = null;
 
@@ -669,8 +677,12 @@ socket.on('state', (s) => {
   updateUptime(s.uptime);
   updateVoiceState(s.voice_state);
   updateDetections(s.detections);
-  voiceEnabled  = s.voice_enabled;
-  visionEnabled = s.vision_enabled;
+  voiceEnabled   = s.voice_enabled;
+  visionEnabled  = s.vision_enabled;
+  captionEnabled = s.caption_enabled;
+  // Grey out caption toggle when vision is off
+  const captionGroup = document.getElementById('captionGroup');
+  if (captionGroup) captionGroup.style.opacity = visionEnabled ? '1' : '0.4';
   syncToggles();
   // Voice overlay: close when voice pipeline signals it's ready
   // (voice_commander publishes 'ready' once OWW+Whisper loaded and audio loop starts)
@@ -767,8 +779,10 @@ function updateDetections(dets) {
 function syncToggles() {
   document.getElementById('voiceToggle').className  = 'toggle-switch' + (voiceEnabled  ? ' on' : '');
   document.getElementById('voiceGroup').className   = 'toggle-group'  + (voiceEnabled  ? ' active' : '');
-  document.getElementById('visionToggle').className = 'toggle-switch' + (visionEnabled ? ' on' : '');
-  document.getElementById('visionGroup').className  = 'toggle-group'  + (visionEnabled ? ' active' : '');
+  document.getElementById('visionToggle').className  = 'toggle-switch' + (visionEnabled  ? ' on' : '');
+  document.getElementById('visionGroup').className   = 'toggle-group'  + (visionEnabled  ? ' active' : '');
+  document.getElementById('captionToggle').className = 'toggle-switch' + (captionEnabled ? ' on' : '');
+  document.getElementById('captionGroup').className  = 'toggle-group'  + (captionEnabled ? ' active' : '');
 }
 
 // ── Controls ──────────────────────────────────────────
@@ -782,9 +796,17 @@ function toggleVoice() {
 
 function toggleVision() {
   visionEnabled = !visionEnabled;
+  if (!visionEnabled) captionEnabled = false;  // caption off when vision off
   syncToggles();
   socket.emit('toggle_vision', { enabled: visionEnabled });
   if (visionEnabled) showStartupOverlay('vision');
+}
+
+function toggleCaption() {
+  if (!visionEnabled) return;  // greyed out — do nothing
+  captionEnabled = !captionEnabled;
+  syncToggles();
+  socket.emit('toggle_caption', { enabled: captionEnabled });
 }
 
 function handleShutdown() {
