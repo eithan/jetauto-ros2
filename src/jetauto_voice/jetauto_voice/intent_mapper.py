@@ -352,19 +352,35 @@ def is_enable_command(text: str) -> bool:
 
 
 def is_what_do_you_see_command(text: str) -> bool:
-    """Return True if the user is asking Jarvis to describe the current scene."""
+    """Return True if the user wants a quick YOLO object summary."""
     t = text.lower().strip()
     return any(
         phrase in t
         for phrase in [
             "what do you see",
             "what can you see",
-            "describe what you see",
-            "what's in front of you",
-            "what is in front of you",
-            "look around",
-            "describe the scene",
+            "what's in front",
+            "what is in front",
             "what do you observe",
+            "look around",
+        ]
+    )
+
+
+def is_describe_scene_command(text: str) -> bool:
+    """Return True if the user wants a detailed Florence-2 scene description."""
+    t = text.lower().strip()
+    return any(
+        phrase in t
+        for phrase in [
+            "give me more detail",
+            "more detail",
+            "describe",
+            "tell me more",
+            "elaborate",
+            "in detail",
+            "detailed description",
+            "what else do you see",
         ]
     )
 

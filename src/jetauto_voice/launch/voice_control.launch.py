@@ -50,7 +50,7 @@ def generate_launch_description():
         'vad_listen_timeout_sec', default_value='30.0',
     )
     vad_speech_end_frames_arg = DeclareLaunchArgument(
-        'vad_speech_end_frames', default_value='30',
+        'vad_speech_end_frames', default_value='18',
     )
     wake_cooldown_sec_arg = DeclareLaunchArgument(
         'wake_cooldown_sec', default_value='5.0',

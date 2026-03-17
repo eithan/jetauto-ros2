@@ -45,6 +45,7 @@ from jetauto_voice.intent_mapper import (
     is_enable_command,
     is_disable_command,
     is_what_do_you_see_command,
+    is_describe_scene_command,
     _HALLUCINATIONS,
 )
 
@@ -115,6 +116,13 @@ class VoiceCommanderNode(Node):
         self._caption_sub = self.create_subscription(
             String, '/scene_caption', self._on_scene_caption, 1
         )
+        try:
+            from jetauto_msgs.msg import DetectedObjectArray
+            self._detection_sub = self.create_subscription(
+                DetectedObjectArray, '/detected_objects', self._on_detections, 1
+            )
+        except Exception:
+            self.get_logger().warn('jetauto_msgs unavailable — YOLO summary disabled')
 
         # -- State --
         self._shutdown_event = threading.Event()
@@ -122,6 +130,7 @@ class VoiceCommanderNode(Node):
         self._stt_model = None
         self._stt_actual_device = self._stt_device
         self._last_caption: str = ''
+        self._last_yolo_description: str = ''
 
         # -- Load models --
         self._init_wakeword()
@@ -298,8 +307,7 @@ class VoiceCommanderNode(Node):
         # --- Greeting ---
         self._pub_voice_state('speaking')
         self._speak_and_wait("Yes?")
-        self._drain_stream(stream, 800)
-        self._play_beep()
+        self._drain_stream(stream, 300)   # absorb echo/reverb, no beep
         self._pub_voice_state('listening')
         self.get_logger().info("Session open — listening for commands")
 
@@ -343,9 +351,8 @@ class VoiceCommanderNode(Node):
                 self.get_logger().info("Session ending after command")
                 break
 
-            # Command executed, drain TTS echo then keep listening
-            self._drain_stream(stream, 800)
-            self._play_beep()
+            # Command executed — drain TTS echo then go back to listening
+            self._drain_stream(stream, 300)
             self._pub_voice_state('listening')
 
         self._pub_voice_state('idle')
@@ -476,6 +483,27 @@ class VoiceCommanderNode(Node):
         if msg.data.strip():
             self._last_caption = msg.data.strip()
 
+    def _on_detections(self, msg) -> None:
+        """Build a natural-language YOLO object summary from latest detections."""
+        if not msg.objects:
+            self._last_yolo_description = ''
+            return
+        # Deduplicate labels, count instances
+        counts: dict = {}
+        for obj in msg.objects:
+            counts[obj.label] = counts.get(obj.label, 0) + 1
+        parts = []
+        for label, n in counts.items():
+            parts.append(f'{n} {label}' if n > 1 else f'a {label}')
+        if len(parts) == 1:
+            self._last_yolo_description = f'I see {parts[0]}.'
+        elif len(parts) == 2:
+            self._last_yolo_description = f'I see {parts[0]} and {parts[1]}.'
+        else:
+            self._last_yolo_description = (
+                f'I see {", ".join(parts[:-1])}, and {parts[-1]}.'
+            )
+
     def _is_stop_command(self, text: str) -> bool:
         # Strip all punctuation so "Jarvis, stop." matches same as "Jarvis stop"
         import re
@@ -488,16 +516,28 @@ class VoiceCommanderNode(Node):
     def _dispatch_intent(self, text: str) -> bool:
         """Execute a voice command. Returns True if session should end."""
 
-        # 0. "What do you see?" → speak latest Florence-2 caption
+        # 0a. "What do you see?" → YOLO object list (fast, always fresh)
         if is_what_do_you_see_command(text):
+            if self._last_yolo_description:
+                self.get_logger().info(f'YOLO summary → "{self._last_yolo_description}"')
+                self._pub_voice_state('speaking')
+                self._speak_and_wait(self._last_yolo_description)
+            else:
+                self.get_logger().info('YOLO summary → nothing detected')
+                self._pub_voice_state('speaking')
+                self._speak_and_wait("I don't see anything right now. Make sure vision is enabled.")
+            return False  # stay in session
+
+        # 0b. "Give me more detail" → Florence-2 cached caption
+        if is_describe_scene_command(text):
             if self._last_caption:
-                self.get_logger().info(f'What do you see → "{self._last_caption}"')
+                self.get_logger().info(f'Florence-2 caption → "{self._last_caption}"')
                 self._pub_voice_state('speaking')
                 self._speak_and_wait(self._last_caption)
             else:
-                self.get_logger().info('What do you see → no caption yet')
+                self.get_logger().info('Florence-2 caption → no caption yet')
                 self._pub_voice_state('speaking')
-                self._speak_and_wait("I haven't captured a scene yet. Make sure vision is enabled.")
+                self._speak_and_wait("I haven't captured a scene description yet. Make sure vision is enabled.")
             return False  # stay in session
 
         # 1. Find object → announce only, no action (vision must be enabled separately)
