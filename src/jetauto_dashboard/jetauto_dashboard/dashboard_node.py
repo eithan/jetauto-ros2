@@ -200,8 +200,12 @@ class DashboardNode(Node):
         self._emit_state()
 
     def _on_vision_enable(self, msg: Bool):
-        self.state['vision_enabled'] = msg.data
-        self._emit_state()
+        enabled = bool(msg.data)
+        # Guard against echo from our own publish in toggle_vision()
+        if enabled == self.state.get('vision_enabled', False):
+            return
+        # External change (e.g. voice command) — run the full toggle
+        self.toggle_vision(enabled)
 
     def _on_voice_state(self, msg: String):
         self.state['voice_state'] = msg.data
@@ -477,6 +481,9 @@ class DashboardNode(Node):
         self.get_logger().info(f'Voice {"enabled" if enabled else "disabled"}')
 
     def toggle_vision(self, enabled: bool):
+        # Set state early so the echo from our own publish is ignored
+        # by _on_vision_enable's guard
+        self.state['vision_enabled'] = enabled
         msg = Bool()
         msg.data = enabled
         self.pub_vision_enable.publish(msg)
