@@ -120,7 +120,6 @@ class DashboardNode(Node):
         self.pub_shutdown = self.create_publisher(Bool, '/jetauto/shutdown', 1)
         self.pub_tts = self.create_publisher(String, '/tts/speak', 1)
         self.pub_tts_cancel = self.create_publisher(Bool, '/tts/cancel', 1)
-        from std_msgs.msg import Float32
         self.pub_volume = self.create_publisher(Float32, '/tts/set_volume', 1)
 
         # -- Uptime timer --
@@ -569,7 +568,6 @@ def create_app(node: DashboardNode):
     @socketio.on('set_volume')
     def on_set_volume(data):
         vol = max(0.0, min(1.0, float(data.get('volume', 0.8))))
-        from std_msgs.msg import Float32
         msg = Float32()
         msg.data = vol
         node.pub_volume.publish(msg)

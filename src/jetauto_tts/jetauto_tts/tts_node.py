@@ -17,7 +17,7 @@ import time
 import rclpy
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Float32, String
 
 from jetauto_msgs.msg import DetectedObjectArray
 
@@ -96,7 +96,6 @@ class TTSNode(LifecycleNode):
         self.sub_cancel = self.create_subscription(
             Bool, '/tts/cancel', self._cancel_callback, 1
         )
-        from std_msgs.msg import Float32
         self.sub_volume = self.create_subscription(
             Float32, '/tts/set_volume', self._set_volume_callback, 1
         )
