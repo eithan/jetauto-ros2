@@ -76,10 +76,15 @@ class CaptionNode(LifecycleNode):
         )
 
         self._shutdown_event.clear()
+        self._trigger_event = threading.Event()
         self._caption_thread = threading.Thread(
             target=self._caption_loop, daemon=True, name='caption_loop'
         )
         self._caption_thread.start()
+
+        self.sub_trigger = self.create_subscription(
+            String, '/scene_caption/trigger', self._on_trigger, 1
+        )
 
         self.get_logger().info('Activated — captioning started')
         return super().on_activate(state)
@@ -201,8 +206,16 @@ class CaptionNode(LifecycleNode):
     # Captioning loop
     # ------------------------------------------------------------------ #
 
+    def _on_trigger(self, msg: String) -> None:
+        """Signal the caption loop to run inference immediately."""
+        if hasattr(self, '_trigger_event'):
+            self._trigger_event.set()
+
     def _caption_loop(self):
-        """Background thread: periodically caption the latest frame."""
+        """Background thread: periodically caption the latest frame.
+
+        Also fires immediately when _trigger_event is set (on-demand requests).
+        """
         # Wait for first frame
         while not self._shutdown_event.is_set():
             with self._frame_lock:
@@ -222,22 +235,31 @@ class CaptionNode(LifecycleNode):
                     frame = self._latest_frame.copy()
 
             if frame is not None and self.model is not None:
+                triggered = self._trigger_event.is_set()
+                self._trigger_event.clear()
+
                 pil_image = PILImage.fromarray(frame)
                 caption = self._run_inference(pil_image)
 
-                if caption and not self._is_similar(caption, self._prev_caption):
-                    msg = String()
-                    msg.data = caption
-                    self.pub_caption.publish(msg)
-                    self.get_logger().info(f'Caption: "{caption}"')
-                    self._prev_caption = caption
-                elif caption:
-                    self.get_logger().debug('Scene unchanged — skipping')
+                if caption:
+                    # Always publish on triggered request even if scene unchanged
+                    if triggered or not self._is_similar(caption, self._prev_caption):
+                        msg = String()
+                        msg.data = caption
+                        self.pub_caption.publish(msg)
+                        self.get_logger().info(
+                            f'Caption{"(triggered)" if triggered else ""}: "{caption}"'
+                        )
+                        self._prev_caption = caption
+                    else:
+                        self.get_logger().debug('Scene unchanged — skipping')
 
-            # Sleep in small increments so we can respond to shutdown
+            # Sleep in small increments; wake early if triggered
             for _ in range(int(self.caption_interval * 2)):
                 if self._shutdown_event.is_set():
                     return
+                if self._trigger_event.is_set():
+                    break  # run inference immediately
                 time.sleep(0.5)
 
     def _run_inference(self, pil_image: PILImage.Image) -> str:

@@ -103,6 +103,7 @@ class VoiceCommanderNode(Node):
         self._detection_pub = self.create_publisher(Bool, "/jetauto/detection/enable", 1)
         self._target_pub = self.create_publisher(String, "/jetauto/detection/target", 1)
         self._tts_pub = self.create_publisher(String, "/tts/speak", 1)
+        self._caption_trigger_pub = self.create_publisher(String, "/scene_caption/trigger", 1)
         # TRANSIENT_LOCAL matches the dashboard subscriber — ensures the first
         # state publish is never lost due to DDS discovery timing.
         _qos_latched = QoSProfile(
@@ -131,6 +132,7 @@ class VoiceCommanderNode(Node):
         self._stt_actual_device = self._stt_device
         self._last_caption: str = ''
         self._last_yolo_description: str = ''
+        self._partial_text: str = ''  # set by early-exit capture, consumed in run_session
 
         # -- Load models --
         self._init_wakeword()
@@ -326,9 +328,10 @@ class VoiceCommanderNode(Node):
                 # Just loop — session stays open until 5-min timeout
                 continue
 
-            # --- Transcribe ---
+            # --- Transcribe (may already be done if early-exit fired) ---
             self._pub_voice_state('processing')
-            text = self._transcribe(audio)
+            text = self._partial_text or self._transcribe(audio)
+            self._partial_text = None
             if not text:
                 self._pub_voice_state('listening')
                 continue
@@ -389,6 +392,9 @@ class VoiceCommanderNode(Node):
         silence_run = 0
         speech_total = 0
         started = False
+        # Early-exit: after this many speech frames, check for command match
+        EARLY_CHECK_FRAMES = 30  # 30 × 20ms = 600ms of speech
+        last_early_check = 0
 
         for i in range(max_frames):
             if self._shutdown_event.is_set():
@@ -419,6 +425,18 @@ class VoiceCommanderNode(Node):
                         break
                 elif i >= timeout_frames:
                     return None   # true silence — no speech at all
+
+            # Early-exit: periodically transcribe partial audio and check for command
+            if started and (speech_total - last_early_check) >= EARLY_CHECK_FRAMES:
+                last_early_check = speech_total
+                partial_audio = np.concatenate(frames).astype(np.float32) / 32768.0
+                partial_text = self._transcribe(partial_audio)
+                if partial_text and self._matches_any_intent(partial_text):
+                    self.get_logger().info(
+                        f"Early-exit match at {speech_total * VAD_MS}ms: \"{partial_text}\""
+                    )
+                    self._partial_text = partial_text
+                    return partial_audio
 
         if not started:
             return None
@@ -478,6 +496,17 @@ class VoiceCommanderNode(Node):
     # Intent dispatch
     # ================================================================== #
 
+    def _matches_any_intent(self, text: str) -> bool:
+        """Quick check if text matches any known command — used for early-exit."""
+        return (
+            is_what_do_you_see_command(text)
+            or is_describe_scene_command(text)
+            or is_enable_command(text)
+            or is_disable_command(text)
+            or self._is_stop_command(text)
+            or self._is_disable_voice_command(text)
+        )
+
     def _on_scene_caption(self, msg: String) -> None:
         """Cache the latest Florence-2 caption for on-demand retrieval."""
         if msg.data.strip():
@@ -528,16 +557,29 @@ class VoiceCommanderNode(Node):
                 self._speak_and_wait("I don't see anything right now. Make sure vision is enabled.")
             return False  # stay in session
 
-        # 0b. "Give me more detail" → Florence-2 cached caption
+        # 0b. "Give me more detail" → trigger fresh Florence-2 inference, then speak
         if is_describe_scene_command(text):
-            if self._last_caption:
-                self.get_logger().info(f'Florence-2 caption → "{self._last_caption}"')
+            self.get_logger().info('Florence-2 on-demand triggered')
+            prev_caption = self._last_caption
+            # Trigger immediate inference
+            trigger_msg = String()
+            trigger_msg.data = 'now'
+            self._caption_trigger_pub.publish(trigger_msg)
+            self._pub_voice_state('processing')
+            # Wait up to 8s for a fresh caption
+            deadline = time.time() + 8.0
+            while time.time() < deadline:
+                if self._last_caption != prev_caption:
+                    break
+                time.sleep(0.2)
+            caption = self._last_caption
+            if caption:
+                self.get_logger().info(f'Florence-2 fresh caption → "{caption}"')
                 self._pub_voice_state('speaking')
-                self._speak_and_wait(self._last_caption)
+                self._speak_and_wait(caption)
             else:
-                self.get_logger().info('Florence-2 caption → no caption yet')
                 self._pub_voice_state('speaking')
-                self._speak_and_wait("I haven't captured a scene description yet. Make sure vision is enabled.")
+                self._speak_and_wait("Vision isn't enabled or the camera isn't ready yet.")
             return False  # stay in session
 
         # 1. Find object → announce only, no action (vision must be enabled separately)
