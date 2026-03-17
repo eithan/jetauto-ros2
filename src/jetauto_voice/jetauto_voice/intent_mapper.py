@@ -347,7 +347,24 @@ def is_enable_command(text: str) -> bool:
             "turn on vision",
             "start looking",
             "start scanning",
+        ]
+    )
+
+
+def is_what_do_you_see_command(text: str) -> bool:
+    """Return True if the user is asking Jarvis to describe the current scene."""
+    t = text.lower().strip()
+    return any(
+        phrase in t
+        for phrase in [
             "what do you see",
+            "what can you see",
+            "describe what you see",
+            "what's in front of you",
+            "what is in front of you",
+            "look around",
+            "describe the scene",
+            "what do you observe",
         ]
     )
 

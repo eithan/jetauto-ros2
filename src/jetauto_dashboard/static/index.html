@@ -529,7 +529,8 @@ html, body {
         </div>
       </div>
 
-      <div class="status-grid">
+      <div class="status-grid-wrap" style="display:flex; gap:12px; align-items:flex-start;">
+      <div class="status-grid" style="flex:1;">
         <div class="stat-card" onclick="refreshStat(this)">
           <div class="stat-label"><span class="status-dot" id="batteryDot"></span>🔋 Battery</div>
           <div class="stat-value" id="batteryValue">N/A</div>
@@ -559,6 +560,19 @@ html, body {
           </ul>
         </div>
       </div>
+
+      <!-- Volume slider -->
+      <div style="display:flex; flex-direction:column; align-items:center; gap:6px; padding:8px 4px;">
+        <span style="font-size:11px; color:var(--text-dim); writing-mode:vertical-rl; text-orientation:mixed; transform:rotate(180deg); letter-spacing:1px;">VOL</span>
+        <input type="range" id="volumeSlider" min="0" max="100" value="80"
+               orient="vertical"
+               style="writing-mode:vertical-lr; direction:rtl; width:28px; height:140px; cursor:pointer; accent-color:var(--accent);"
+               oninput="onVolumeChange(this.value)" />
+        <span style="font-size:11px; color:var(--text-dim);" id="volumeLabel">80%</span>
+        <span style="font-size:18px;">🔊</span>
+      </div>
+
+      </div><!-- end status-grid-wrap -->
     </div>
   </div>
 
@@ -574,13 +588,6 @@ html, body {
     <div class="toggle-group" id="visionGroup">
       <span class="toggle-label">👁 Vision</span>
       <div class="toggle-switch" id="visionToggle" onclick="toggleVision()"></div>
-    </div>
-
-    <div class="control-sep"></div>
-
-    <div class="toggle-group" id="captionGroup">
-      <span class="toggle-label">🔍 Caption</span>
-      <div class="toggle-switch" id="captionToggle" onclick="toggleCaption()"></div>
     </div>
 
     <div class="control-sep"></div>
@@ -609,9 +616,8 @@ html, body {
 <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
 <script>
 // ── State ─────────────────────────────────────────────
-let voiceEnabled   = false;
-let visionEnabled  = false;
-let captionEnabled = false;
+let voiceEnabled  = false;
+let visionEnabled = false;
 let shutdownPending = false;
 let shutdownTimer = null;
 
@@ -677,12 +683,8 @@ socket.on('state', (s) => {
   updateUptime(s.uptime);
   updateVoiceState(s.voice_state);
   updateDetections(s.detections);
-  voiceEnabled   = s.voice_enabled;
-  visionEnabled  = s.vision_enabled;
-  captionEnabled = s.caption_enabled;
-  // Grey out caption toggle when vision is off
-  const captionGroup = document.getElementById('captionGroup');
-  if (captionGroup) captionGroup.style.opacity = visionEnabled ? '1' : '0.4';
+  voiceEnabled  = s.voice_enabled;
+  visionEnabled = s.vision_enabled;
   syncToggles();
   // Voice overlay: close when voice pipeline signals it's ready
   // (voice_commander publishes 'ready' once OWW+Whisper loaded and audio loop starts)
@@ -779,10 +781,8 @@ function updateDetections(dets) {
 function syncToggles() {
   document.getElementById('voiceToggle').className  = 'toggle-switch' + (voiceEnabled  ? ' on' : '');
   document.getElementById('voiceGroup').className   = 'toggle-group'  + (voiceEnabled  ? ' active' : '');
-  document.getElementById('visionToggle').className  = 'toggle-switch' + (visionEnabled  ? ' on' : '');
-  document.getElementById('visionGroup').className   = 'toggle-group'  + (visionEnabled  ? ' active' : '');
-  document.getElementById('captionToggle').className = 'toggle-switch' + (captionEnabled ? ' on' : '');
-  document.getElementById('captionGroup').className  = 'toggle-group'  + (captionEnabled ? ' active' : '');
+  document.getElementById('visionToggle').className = 'toggle-switch' + (visionEnabled ? ' on' : '');
+  document.getElementById('visionGroup').className  = 'toggle-group'  + (visionEnabled ? ' active' : '');
 }
 
 // ── Controls ──────────────────────────────────────────
@@ -796,17 +796,18 @@ function toggleVoice() {
 
 function toggleVision() {
   visionEnabled = !visionEnabled;
-  if (!visionEnabled) captionEnabled = false;  // caption off when vision off
   syncToggles();
   socket.emit('toggle_vision', { enabled: visionEnabled });
   if (visionEnabled) showStartupOverlay('vision');
 }
 
-function toggleCaption() {
-  if (!visionEnabled) return;  // greyed out — do nothing
-  captionEnabled = !captionEnabled;
-  syncToggles();
-  socket.emit('toggle_caption', { enabled: captionEnabled });
+let _volumeDebounce = null;
+function onVolumeChange(val) {
+  document.getElementById('volumeLabel').textContent = val + '%';
+  clearTimeout(_volumeDebounce);
+  _volumeDebounce = setTimeout(() => {
+    socket.emit('set_volume', { volume: val / 100 });
+  }, 150);
 }
 
 function handleShutdown() {

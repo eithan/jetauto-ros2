@@ -4,7 +4,7 @@ caption_node:
     image_topic: "/depth_cam/rgb/image_raw"
     image_encoding: "rgb8"
     caption_interval: 15.0
-    task_prompt: "<MORE_DETAILED_CAPTION>"
-    similarity_threshold: 0.6
+    task_prompt: "<CAPTION>"
+    similarity_threshold: 0.5
     device: "cuda:0"
-    max_new_tokens: 256
+    max_new_tokens: 64

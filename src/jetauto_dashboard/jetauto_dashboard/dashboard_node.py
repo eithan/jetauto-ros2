@@ -61,7 +61,6 @@ class DashboardNode(Node):
             'gpu_temp': None,
             'voice_enabled': False,
             'vision_enabled': False,
-            'caption_enabled': False,
             'voice_state': 'idle',  # idle | listening | processing | speaking
             'detections': [],       # last 5 detected objects
             'uptime': 0,
@@ -120,9 +119,16 @@ class DashboardNode(Node):
         self.pub_vision_enable = self.create_publisher(Bool, '/jetauto/detection/enable', 1)
         self.pub_shutdown = self.create_publisher(Bool, '/jetauto/shutdown', 1)
         self.pub_tts = self.create_publisher(String, '/tts/speak', 1)
+        self.pub_tts_cancel = self.create_publisher(Bool, '/tts/cancel', 1)
+        from std_msgs.msg import Float32
+        self.pub_volume = self.create_publisher(Float32, '/tts/set_volume', 1)
 
         # -- Uptime timer --
         self.create_timer(1.0, self._tick_uptime)
+
+        # -- Auto-enable voice on startup --
+        self._startup_done = False
+        self._startup_timer = self.create_timer(3.0, self._on_startup)
 
         # -- System monitor (reads temps/battery from sysfs directly) --
         monitor_interval = self.get_parameter('system_monitor_interval').value
@@ -220,12 +226,16 @@ class DashboardNode(Node):
             self._emit_state()
 
     def _on_scene_caption(self, msg: String):
-        """Forward Florence-2 captions to TTS when caption is enabled."""
-        if not msg.data or not self.state.get('caption_enabled'):
-            return
-        tts_msg = String()
-        tts_msg.data = msg.data
-        self.pub_tts.publish(tts_msg)
+        """Store latest caption — spoken on demand only (via voice command)."""
+        pass  # caption_node → voice_commander handles on-demand speech
+
+    def _on_startup(self):
+        """Auto-enable voice once on startup."""
+        if not self._startup_done:
+            self._startup_done = True
+            self._startup_timer.cancel()
+            self.toggle_voice(True)
+            self.get_logger().info('Auto-enabled voice on startup')
 
     def _on_detections(self, msg):
         """Update detection state when detected labels change.
@@ -477,39 +487,23 @@ class DashboardNode(Node):
         if enabled:
             self._launch_tts()       # TTS needed for announcements
             self._launch_detector()
+            self._launch_caption()   # Florence-2 runs silently; speaks on demand
             # Re-publish enable after detector has time to subscribe.
-            # vision_launch.py sets start_enabled=True, but this is
-            # belt-and-suspenders in case the param is overridden.
             def _re_enable():
                 time.sleep(15)
                 if self.state.get('vision_enabled'):
                     self.pub_vision_enable.publish(msg)
             threading.Thread(target=_re_enable, daemon=True).start()
         else:
-            # Kill caption when vision goes off — can't caption without camera
-            if self.state.get('caption_enabled'):
-                self._kill_caption()
-                self.state['caption_enabled'] = False
-                self._emit_state()
+            # Cancel any queued/current TTS immediately
+            cancel_msg = Bool()
+            cancel_msg.data = True
+            self.pub_tts_cancel.publish(cancel_msg)
+            self._kill_caption()
             self._maybe_kill_detector()  # only kill if voice also off
             self._maybe_kill_tts()       # only kill TTS if voice also off
 
         self.get_logger().info(f'Vision {"enabled" if enabled else "disabled"}')
-
-    def toggle_caption(self, enabled: bool):
-        """Toggle Florence-2 scene captioning independently of YOLO."""
-        # Caption requires vision to be on (needs the camera feed)
-        if enabled and not self.state.get('vision_enabled'):
-            self.get_logger().warn('Caption requested but vision is off — ignoring')
-            return
-        self.state['caption_enabled'] = enabled
-        self._emit_state()
-        if enabled:
-            self._launch_tts()    # TTS needed to speak captions
-            self._launch_caption()
-        else:
-            self._kill_caption()
-        self.get_logger().info(f'Caption {"enabled" if enabled else "disabled"}')
 
     def request_shutdown(self):
         msg = Bool()
@@ -572,9 +566,13 @@ def create_app(node: DashboardNode):
     def on_toggle_vision(data):
         node.toggle_vision(data.get('enabled', False))
 
-    @socketio.on('toggle_caption')
-    def on_toggle_caption(data):
-        node.toggle_caption(data.get('enabled', False))
+    @socketio.on('set_volume')
+    def on_set_volume(data):
+        vol = max(0.0, min(1.0, float(data.get('volume', 0.8))))
+        from std_msgs.msg import Float32
+        msg = Float32()
+        msg.data = vol
+        node.pub_volume.publish(msg)
 
     @socketio.on('shutdown')
     def on_shutdown():

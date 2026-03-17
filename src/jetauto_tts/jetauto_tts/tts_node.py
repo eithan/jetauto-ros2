@@ -93,6 +93,13 @@ class TTSNode(LifecycleNode):
         self.sub_caption = self.create_subscription(
             String, '/scene_caption', self._caption_callback, 1
         )
+        self.sub_cancel = self.create_subscription(
+            Bool, '/tts/cancel', self._cancel_callback, 1
+        )
+        from std_msgs.msg import Float32
+        self.sub_volume = self.create_subscription(
+            Float32, '/tts/set_volume', self._set_volume_callback, 1
+        )
         # Publish speaking state so the voice commander can mute the mic
         self._speaking_pub = self.create_publisher(Bool, '/tts/speaking', 1)
         # Publish voice state so the dashboard face animates during TTS.
@@ -233,40 +240,43 @@ class TTSNode(LifecycleNode):
     # ------------------------------------------------------------------ #
 
     def _caption_callback(self, msg: String):
-        """Speak a scene caption from Florence-2.
+        """Track Florence-2 caption activity to suppress YOLO announcements.
 
-        Replaces YOLO detection announcements with natural-language
-        descriptions when the caption pipeline is active.
+        Does NOT auto-speak — captions are spoken on demand via voice command.
         """
-        text = msg.data.strip()
-        if not text:
+        if msg.data.strip():
+            self._caption_active = True
+
+    def _cancel_callback(self, msg: Bool):
+        """Clear the speech queue and reset speaking state."""
+        if not msg.data:
             return
-
-        # Mark caption pipeline as active — suppresses YOLO announcements
-        self._caption_active = True
-
-        # Strip common third-person prefixes and convert to first-person
-        for prefix in (
-            'The image shows ', 'The image depicts ', 'The image features ',
-            'In this image, ', 'In the image, ', 'This image shows ',
-            'The picture shows ', 'The photo shows ',
-        ):
-            if text.startswith(prefix):
-                text = text[len(prefix):]
+        # Drain queue
+        while not self._speech_queue.empty():
+            try:
+                self._speech_queue.get_nowait()
+            except Exception:
                 break
-            lower = text.lower()
-            if lower.startswith(prefix.lower()):
-                text = text[len(prefix):]
-                break
+        # Best-effort stop current utterance
+        try:
+            if self.tts_engine:
+                self.tts_engine.stop()
+        except Exception:
+            pass
+        self._publish_speaking(False)
+        self._publish_voice_state('idle')
+        self.get_logger().info('TTS cancelled — queue cleared')
 
-        # Capitalize first letter and prepend greeting
-        if text:
-            text = text[0].upper() + text[1:] if len(text) > 1 else text.upper()
-
-        announcement = f'{self.caption_greeting} {text}' if self.caption_greeting else text
-
-        self.get_logger().info(f'Scene caption: "{announcement}"')
-        self._enqueue_speech(announcement)
+    def _set_volume_callback(self, msg) -> None:
+        """Set TTS engine volume (0.0 – 1.0)."""
+        vol = max(0.0, min(1.0, float(msg.data)))
+        self.volume = vol
+        try:
+            if self.tts_engine:
+                self.tts_engine.setProperty('volume', vol)
+        except Exception as e:
+            self.get_logger().warn(f'Could not set volume: {e}')
+        self.get_logger().info(f'Volume set to {vol:.2f}')
 
     def _detection_callback(self, msg: DetectedObjectArray):
         """Process detected objects and announce them.

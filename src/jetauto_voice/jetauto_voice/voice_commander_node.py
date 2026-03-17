@@ -39,10 +39,12 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_msgs.msg import Bool, String
 
+from std_msgs.msg import Float32 as Float32Msg  # noqa: F401 — used via type hint
 from jetauto_voice.intent_mapper import (
     extract_target,
     is_enable_command,
     is_disable_command,
+    is_what_do_you_see_command,
     _HALLUCINATIONS,
 )
 
@@ -109,11 +111,17 @@ class VoiceCommanderNode(Node):
         )
         self._voice_state_pub = self.create_publisher(String, "/jetauto/voice/state", _qos_latched)
 
+        # -- Subscriptions --
+        self._caption_sub = self.create_subscription(
+            String, '/scene_caption', self._on_scene_caption, 1
+        )
+
         # -- State --
         self._shutdown_event = threading.Event()
         self._wake_word_detector = None
         self._stt_model = None
         self._stt_actual_device = self._stt_device
+        self._last_caption: str = ''
 
         # -- Load models --
         self._init_wakeword()
@@ -463,6 +471,11 @@ class VoiceCommanderNode(Node):
     # Intent dispatch
     # ================================================================== #
 
+    def _on_scene_caption(self, msg: String) -> None:
+        """Cache the latest Florence-2 caption for on-demand retrieval."""
+        if msg.data.strip():
+            self._last_caption = msg.data.strip()
+
     def _is_stop_command(self, text: str) -> bool:
         # Strip all punctuation so "Jarvis, stop." matches same as "Jarvis stop"
         import re
@@ -474,6 +487,18 @@ class VoiceCommanderNode(Node):
 
     def _dispatch_intent(self, text: str) -> bool:
         """Execute a voice command. Returns True if session should end."""
+
+        # 0. "What do you see?" → speak latest Florence-2 caption
+        if is_what_do_you_see_command(text):
+            if self._last_caption:
+                self.get_logger().info(f'What do you see → "{self._last_caption}"')
+                self._pub_voice_state('speaking')
+                self._speak_and_wait(self._last_caption)
+            else:
+                self.get_logger().info('What do you see → no caption yet')
+                self._pub_voice_state('speaking')
+                self._speak_and_wait("I haven't captured a scene yet. Make sure vision is enabled.")
+            return False  # stay in session
 
         # 1. Find object → announce only, no action (vision must be enabled separately)
         result = extract_target(text)
