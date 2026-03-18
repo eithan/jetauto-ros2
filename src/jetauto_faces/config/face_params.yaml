@@ -1,0 +1,49 @@
+face_recognition_node:
+  ros__parameters:
+    # --- Camera ---
+    image_topic: "/depth_cam/rgb/image_raw"
+    image_encoding: "bgr8"
+
+    # --- Detection source ---
+    # Subscribe to YOLO detections to find "person" bounding boxes
+    detection_topic: "/detected_objects"
+
+    # --- InsightFace model ---
+    # Model name for insightface app (uses buffalo_l by default)
+    # buffalo_l: best accuracy, ~600MB
+    # buffalo_s: smaller/faster, ~200MB
+    # buffalo_sc: smallest, ~100MB (face detection only, no recognition)
+    model_name: "buffalo_l"
+    # Detection size — larger = more accurate face detection but slower
+    det_size: 640
+    # GPU device id (-1 for CPU)
+    gpu_id: 0
+
+    # --- Recognition ---
+    # Directory containing enrolled face embeddings (.npz files)
+    faces_db_path: "/home/ubuntu/ros2_ws/src/jetauto-ros2/data/faces"
+    # Minimum cosine similarity to consider a match [0.0-1.0]
+    recognition_threshold: 0.4
+    # Minimum face size in pixels (width or height) to attempt recognition
+    min_face_size: 40
+
+    # --- Performance ---
+    # Minimum seconds between face recognition attempts
+    recognition_interval: 0.5
+    # Only process the N closest/largest person detections per frame
+    max_persons_per_frame: 5
+
+    # --- Greeting integration ---
+    # Cooldown (seconds) before greeting the same person again
+    greeting_cooldown: 60.0
+    # Topic to publish greeting text (TTS node listens on /tts/speak)
+    greeting_topic: "/tts/speak"
+    # Enable automatic greeting when a known face is recognized
+    auto_greet: true
+    # Greeting template ({name} is replaced with the person's name)
+    greeting_template: "Hello {name}!"
+
+    # --- Output ---
+    # Publish annotated image with face bounding boxes and names
+    publish_annotated_image: true
+    annotated_image_topic: "/recognized_faces/image"
