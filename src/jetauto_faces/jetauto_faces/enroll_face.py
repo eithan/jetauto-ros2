@@ -336,9 +336,9 @@ Examples:
     parser.add_argument('--capture', type=int, help='Capture N webcam photos')
     parser.add_argument(
         '--db', type=str,
-        default=os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        default=os.path.join(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__)
-        ))), 'data', 'faces'),
+        )), 'data', 'faces'),
         help='Face database directory',
     )
     parser.add_argument('--model', type=str, default='buffalo_l', help='InsightFace model')
