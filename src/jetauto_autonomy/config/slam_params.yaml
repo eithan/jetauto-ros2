@@ -1,0 +1,73 @@
+# slam_toolbox configuration tuned for house-scale mapping
+# JetAuto with SLAMTEC A1 lidar (12m range, 360°, ~8000 samples/scan)
+# Mecanum drive: wheelbase=0.216m, track=0.195m, wheel=0.097m
+
+slam_toolbox:
+  ros__parameters:
+    # ── Core Settings ──
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+
+    # ── SLAM Mode ──
+    # async = non-blocking (better for real-time on Orin Nano)
+    mode: mapping  # switch to 'localization' after map is saved
+
+    # ── Scan Processing ──
+    # A1 lidar: 12m max range, but readings past 8m get noisy indoors
+    max_laser_range: 8.0
+    minimum_travel_distance: 0.15     # meters before new scan processed (was 0.5 default — too far for rooms)
+    minimum_travel_heading: 0.15      # radians (~8.6°) before new scan
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 8.0
+    use_scan_matching: true
+    use_scan_barycenter: true
+
+    # ── Resolution ──
+    # 0.05m = 5cm per pixel — good balance of detail vs memory for a house
+    resolution: 0.05
+
+    # ── Loop Closure (critical for house-scale) ──
+    # Houses have repeating features (doorways, walls). Need aggressive loop closure.
+    do_loop_closing: true
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35    # lower = more loop closure candidates (default 0.35)
+    loop_match_minimum_response_fine: 0.45      # fine match threshold
+
+    # ── Correlation / Scan Matching ──
+    # Larger search window for house environments (longer hallways, bigger rooms)
+    correlation_search_space_dimension: 0.5     # meters search window
+    correlation_search_space_resolution: 0.01   # 1cm resolution in search
+    correlation_search_space_smear_deviation: 0.1
+
+    # ── Loop Closure Search ──
+    loop_search_space_dimension: 8.0            # search up to 8m for loop closures (room-to-room)
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+    loop_search_maximum_distance: 8.0
+
+    # ── Performance Tuning (Orin Nano 8GB) ──
+    transform_publish_period: 0.04              # 25Hz TF updates (plenty fast)
+    map_update_interval: 3.0                    # update occupancy grid every 3s (save CPU)
+    throttle_scans: 1                           # process every scan (A1 isn't that fast)
+    enable_interactive_mode: false               # no RViz interactive mode needed
+
+    # ── Frames ──
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_footprint
+    scan_topic: /scan
+
+    # ── Map Serialization ──
+    # Save/load map state for persistent mapping across sessions
+    map_file_name: ''                           # set at launch time
+    map_start_pose: [0.0, 0.0, 0.0]
+    map_start_at_dock: true
+
+    # ── Debug ──
+    debug_logging: false
+    transform_timeout: 0.2
+    tf_buffer_duration: 30.0
+    stack_size_to_use: 40000000                 # 40MB stack (default)
