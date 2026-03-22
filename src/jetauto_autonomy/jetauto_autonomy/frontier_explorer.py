@@ -19,6 +19,7 @@ Based on the explore_lite approach but implemented as a standalone ROS2 node
 import math
 import time
 from collections import deque
+from datetime import datetime
 from typing import List, Tuple, Optional
 
 import numpy as np
@@ -43,6 +44,11 @@ OCCUPIED = 100
 
 # Frontier clustering: cells within this distance (in grid cells) are same frontier
 CLUSTER_RADIUS = 5
+
+
+def _ts():
+    """Human-readable timestamp for log messages."""
+    return datetime.now().strftime('%H:%M:%S')
 
 
 class FrontierExplorer(Node):
@@ -109,7 +115,7 @@ class FrontierExplorer(Node):
         )
 
         self.get_logger().info(
-            f'Frontier explorer initialized '
+            f'[{_ts()}] Frontier explorer initialized '
             f'(timeout={self.explore_timeout}s, min_frontier={self.min_frontier_size})'
         )
 
@@ -263,7 +269,7 @@ class FrontierExplorer(Node):
                 return
             self._map_ready = True
             self.get_logger().info(
-                f'Map ready! {free_cells} free cells, '
+                f'[{_ts()}] Map ready! {free_cells} free cells, '
                 f'{self._map.info.width}x{self._map.info.height} grid'
             )
 
@@ -297,7 +303,7 @@ class FrontierExplorer(Node):
 
         if not (map_x_min < rx < map_x_max and map_y_min < ry < map_y_max):
             self.get_logger().warn(
-                f'Robot ({rx:.2f}, {ry:.2f}) far outside map bounds. '
+                f'[{_ts()}] Robot ({rx:.2f}, {ry:.2f}) far outside map bounds. '
                 f'Waiting for SLAM to expand...'
             )
             return
@@ -335,7 +341,7 @@ class FrontierExplorer(Node):
         wx, wy = self._grid_to_world(int(cx), int(cy))
 
         self.get_logger().info(
-            f'Exploring frontier at ({wx:.2f}, {wy:.2f}) — '
+            f'[{_ts()}] Exploring frontier at ({wx:.2f}, {wy:.2f}) — '
             f'size={len(best_cluster)}, score={best_score:.1f}, '
             f'frontiers_remaining={len(scored)}'
         )
@@ -381,10 +387,10 @@ class FrontierExplorer(Node):
         status = result.status
 
         if status == GoalStatus.STATUS_SUCCEEDED:
-            self.get_logger().info(f'✅ Reached frontier ({x:.2f}, {y:.2f})')
+            self.get_logger().info(f'[{_ts()}] ✅ Reached frontier ({x:.2f}, {y:.2f})')
             self._goals_reached += 1
         elif status == GoalStatus.STATUS_ABORTED:
-            self.get_logger().warn(f'❌ Failed to reach ({x:.2f}, {y:.2f}) — aborted')
+            self.get_logger().warn(f'[{_ts()}] ❌ Failed to reach ({x:.2f}, {y:.2f}) — aborted')
             self._failed_goals.append((x, y))
         elif status == GoalStatus.STATUS_CANCELED:
             self.get_logger().info(f'⏹ Goal ({x:.2f}, {y:.2f}) canceled')
@@ -409,7 +415,7 @@ def main(args=None):
         pass
     finally:
         node.get_logger().info(
-            f'Explorer stopped. Goals: {node._goals_sent} sent, '
+            f'[{_ts()}] Explorer stopped. Goals: {node._goals_sent} sent, '
             f'{node._goals_reached} reached'
         )
         node.destroy_node()

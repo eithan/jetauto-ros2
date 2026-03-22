@@ -11,6 +11,7 @@ republishes cmd_vel immediately. We must CANCEL the goal too.
 
 import math
 import time
+from datetime import datetime
 from typing import Optional, Tuple
 
 import rclpy
@@ -25,6 +26,11 @@ from std_msgs.msg import String
 from nav2_msgs.action import NavigateToPose
 from action_msgs.srv import CancelGoal
 from tf2_ros import Buffer, TransformListener
+
+
+def _ts():
+    """Human-readable timestamp for log messages."""
+    return datetime.now().strftime('%H:%M:%S')
 
 
 class SafetyMonitor(Node):
@@ -92,7 +98,7 @@ class SafetyMonitor(Node):
         self._check_timer = self.create_timer(1.0 / freq, self._safety_check)
 
         self.get_logger().info(
-            f'Safety monitor active — e-stop at {self.min_dist}m, '
+            f'[{_ts()}] Safety monitor active — e-stop at {self.min_dist}m, '
             f'warn at {self.warn_dist}m, resume at {self.resume_dist}m'
         )
 
@@ -132,7 +138,7 @@ class SafetyMonitor(Node):
                     held = time.time() - self._stuck_estop_start
                     if held >= self.stuck_hold_time:
                         self.get_logger().info(
-                            f'✅ Stuck e-stop cleared — robot moved after {held:.0f}s hold'
+                            f'[{_ts()}] ✅ Stuck e-stop cleared — robot moved after {held:.0f}s hold'
                         )
                         self._stuck_estop_active = False
 
@@ -173,7 +179,7 @@ class SafetyMonitor(Node):
                 self._goal_canceled = False
                 self._estop_count += 1
                 self.get_logger().error(
-                    f'🛑 EMERGENCY STOP #{self._estop_count} — '
+                    f'[{_ts()}] 🛑 EMERGENCY STOP #{self._estop_count} — '
                     f'obstacle at {min_reading:.3f}m (threshold: {self.min_dist}m)'
                 )
 
@@ -186,7 +192,7 @@ class SafetyMonitor(Node):
             # Use hysteresis — don't clear until obstacle is well clear
             if min_reading >= self.resume_dist:
                 self.get_logger().info(
-                    f'✅ E-stop cleared — closest obstacle at {min_reading:.3f}m '
+                    f'[{_ts()}] ✅ E-stop cleared — closest obstacle at {min_reading:.3f}m '
                     f'(resume threshold: {self.resume_dist}m)'
                 )
                 self._estop_active = False
@@ -213,7 +219,7 @@ class SafetyMonitor(Node):
                     self._stuck_estop_start = time.time()
                     self._estop_count += 1
                     self.get_logger().error(
-                        f'🛑 STUCK DETECTED #{self._estop_count} — '
+                        f'[{_ts()}] 🛑 STUCK DETECTED #{self._estop_count} — '
                         f'no SLAM movement for {time_since_move:.1f}s despite motor commands. '
                         f'Canceling Nav2 goals.'
                     )
@@ -257,7 +263,7 @@ def main(args=None):
         pass
     finally:
         node.get_logger().info(
-            f'Safety monitor stopped. Total e-stops: {node._estop_count}'
+            f'[{_ts()}] Safety monitor stopped. Total e-stops: {node._estop_count}'
         )
         node.destroy_node()
         try:
