@@ -21,9 +21,9 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 from nav2_msgs.action import NavigateToPose
+from tf2_ros import Buffer, TransformListener
 
 
 class SafetyMonitor(Node):
@@ -52,11 +52,15 @@ class SafetyMonitor(Node):
         self._estop_count = 0
         self._goal_canceled = False
 
-        # Stuck detection state
+        # Stuck detection state (uses SLAM position, not odometry)
         self._last_cmd_vel: Optional[Twist] = None
-        self._last_position: Optional[Tuple[float, float]] = None
+        self._last_slam_position: Optional[Tuple[float, float]] = None
         self._last_move_time: float = time.time()
         self._stuck_estop_active = False
+
+        # TF listener for SLAM-based position (immune to wheel slip)
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
 
         # Publishers — cmd_vel at high QoS priority
         self._cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -65,10 +69,6 @@ class SafetyMonitor(Node):
         # Subscribers
         self._scan_sub = self.create_subscription(
             LaserScan, '/scan', self._scan_callback,
-            QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
-        )
-        self._odom_sub = self.create_subscription(
-            Odometry, '/odom', self._odom_callback,
             QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
         )
         self._cmd_vel_sub = self.create_subscription(
@@ -94,14 +94,30 @@ class SafetyMonitor(Node):
         """Store latest lidar scan."""
         self._latest_scan = msg
 
-    def _odom_callback(self, msg: Odometry):
-        """Track robot position for stuck detection."""
-        x = msg.pose.pose.position.x
-        y = msg.pose.pose.position.y
+    def _cmd_vel_callback(self, msg: Twist):
+        """Track velocity commands for stuck detection."""
+        self._last_cmd_vel = msg
 
-        if self._last_position is not None:
-            dx = x - self._last_position[0]
-            dy = y - self._last_position[1]
+    def _get_slam_position(self) -> Optional[Tuple[float, float]]:
+        """Get robot position from SLAM (map frame) — immune to wheel slip."""
+        try:
+            t = self._tf_buffer.lookup_transform(
+                'map', 'base_footprint', rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.1),
+            )
+            return (t.transform.translation.x, t.transform.translation.y)
+        except Exception:
+            return None
+
+    def _check_stuck(self):
+        """Check if robot is stuck using SLAM position (not odometry)."""
+        pos = self._get_slam_position()
+        if pos is None:
+            return
+
+        if self._last_slam_position is not None:
+            dx = pos[0] - self._last_slam_position[0]
+            dy = pos[1] - self._last_slam_position[1]
             dist = math.sqrt(dx * dx + dy * dy)
             if dist > self.stuck_move_threshold:
                 self._last_move_time = time.time()
@@ -109,11 +125,7 @@ class SafetyMonitor(Node):
                     self.get_logger().info('✅ Stuck e-stop cleared — robot is moving again')
                     self._stuck_estop_active = False
 
-        self._last_position = (x, y)
-
-    def _cmd_vel_callback(self, msg: Twist):
-        """Track velocity commands for stuck detection."""
-        self._last_cmd_vel = msg
+        self._last_slam_position = pos
 
     def _safety_check(self):
         """Check for dangerously close obstacles."""
@@ -172,8 +184,9 @@ class SafetyMonitor(Node):
                 stop = Twist()
                 self._cmd_pub.publish(stop)
 
-        # ── Stuck detection ──
-        # If motors are running but robot hasn't moved, it's stuck on something
+        # ── Stuck detection (SLAM-based, immune to wheel slip) ──
+        self._check_stuck()
+
         if self._last_cmd_vel is not None and not self._estop_active:
             cmd = self._last_cmd_vel
             is_commanded = (
@@ -189,7 +202,7 @@ class SafetyMonitor(Node):
                     self._estop_count += 1
                     self.get_logger().error(
                         f'🛑 STUCK DETECTED #{self._estop_count} — '
-                        f'no movement for {time_since_move:.1f}s despite motor commands. '
+                        f'no SLAM movement for {time_since_move:.1f}s despite motor commands. '
                         f'Canceling Nav2 goals.'
                     )
                     stop = Twist()
