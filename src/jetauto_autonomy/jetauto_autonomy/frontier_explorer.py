@@ -98,6 +98,11 @@ class FrontierExplorer(Node):
             callback_group=ReentrantCallbackGroup(),
         )
 
+        # Minimum map size before we start exploring (in cells)
+        self.declare_parameter('min_map_cells', 500)  # ~500 free cells before starting
+        self.min_map_cells = self.get_parameter('min_map_cells').value
+        self._map_ready = False
+
         # Main exploration timer
         self._explore_timer = self.create_timer(
             self.replan_interval, self._explore_tick
@@ -245,6 +250,23 @@ class FrontierExplorer(Node):
             self.get_logger().info('Waiting for map from slam_toolbox...')
             return
 
+        # Wait for map to be big enough (SLAM needs time to build)
+        if not self._map_ready:
+            data = self._map.data
+            free_cells = sum(1 for c in data if c == FREE)
+            total_cells = len(data)
+            if free_cells < self.min_map_cells:
+                self.get_logger().info(
+                    f'Waiting for map to grow: {free_cells}/{self.min_map_cells} '
+                    f'free cells (map: {self._map.info.width}x{self._map.info.height})'
+                )
+                return
+            self._map_ready = True
+            self.get_logger().info(
+                f'Map ready! {free_cells} free cells, '
+                f'{self._map.info.width}x{self._map.info.height} grid'
+            )
+
         # Wait for Nav2
         if not self._nav_client.wait_for_server(timeout_sec=1.0):
             self.get_logger().info('Waiting for Nav2 action server...')
@@ -262,6 +284,22 @@ class FrontierExplorer(Node):
         # Get robot position
         robot_pos = self._get_robot_position()
         if robot_pos is None:
+            return
+
+        # Verify robot is within the map bounds
+        info = self._map.info
+        map_x_min = info.origin.position.x
+        map_y_min = info.origin.position.y
+        map_x_max = map_x_min + info.width * info.resolution
+        map_y_max = map_y_min + info.height * info.resolution
+        rx, ry = robot_pos
+
+        if not (map_x_min < rx < map_x_max and map_y_min < ry < map_y_max):
+            self.get_logger().warn(
+                f'Robot ({rx:.2f}, {ry:.2f}) outside map bounds '
+                f'({map_x_min:.2f},{map_y_min:.2f})-({map_x_max:.2f},{map_y_max:.2f}). '
+                f'Waiting for SLAM to expand...'
+            )
             return
 
         # Find frontiers
