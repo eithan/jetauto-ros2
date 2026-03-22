@@ -17,6 +17,7 @@ slam_toolbox:
     # ── Scan Processing ──
     # A1 lidar: 12m max range, but readings past 8m get noisy indoors
     max_laser_range: 8.0
+    minimum_laser_range: 0.2          # A1 lidar minimum range (silences warning)
     minimum_travel_distance: 0.15     # meters before new scan processed (was 0.5 default — too far for rooms)
     minimum_travel_heading: 0.15      # radians (~8.6°) before new scan
     scan_buffer_size: 10
