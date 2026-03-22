@@ -62,7 +62,7 @@ def generate_launch_description():
             PathJoinSubstitution([
                 FindPackageShare('jetauto_description'),
                 'launch',
-                'jetauto_description.launch.py',
+                'robot_description.launch.py',
             ])
         ),
     )
