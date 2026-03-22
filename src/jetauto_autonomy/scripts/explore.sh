@@ -17,24 +17,35 @@ NC='\033[0m'
 cleanup() {
     echo -e "\n${RED}🛑 Stopping all nodes...${NC}"
     
-    # Send zero velocity
+    # Send zero velocity FIRST (immediate stop)
     ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist \
       '{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}' 2>/dev/null &
     
-    # Kill all child processes
-    kill $(jobs -p) 2>/dev/null
-    wait $(jobs -p) 2>/dev/null
+    # Kill our specific nodes
+    pkill -f frontier_explorer 2>/dev/null
+    pkill -f safety_monitor 2>/dev/null
     
-    # Kill Nav2 processes
+    # Kill Nav2 — must kill all spawned processes
     pkill -f navigation_launch 2>/dev/null
     pkill -f nav2 2>/dev/null
     pkill -f bt_navigator 2>/dev/null
     pkill -f controller_server 2>/dev/null
     pkill -f planner_server 2>/dev/null
+    pkill -f behavior_server 2>/dev/null
+    pkill -f smoother_server 2>/dev/null
+    pkill -f velocity_smoother 2>/dev/null
+    pkill -f waypoint_follower 2>/dev/null
+    pkill -f lifecycle_manager 2>/dev/null
+    pkill -f map_server 2>/dev/null
+    
+    # Kill SLAM
     pkill -f slam_toolbox 2>/dev/null
     
-    # Final zero velocity
-    sleep 0.3
+    # Kill entire process group (catches anything we missed)
+    kill -- -$$ 2>/dev/null
+    
+    # Wait briefly then send zero velocity again
+    sleep 0.5
     ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist \
       '{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}' 2>/dev/null
     

@@ -200,7 +200,7 @@ global_costmap:
         depth:
           topic: /depth_cam/depth/points
           data_type: PointCloud2
-          max_obstacle_height: 0.50   # detect obstacles up to 50cm (beds, chairs, tables)
+          max_obstacle_height: 0.80   # detect obstacles up to 50cm (beds, chairs, tables)
           min_obstacle_height: 0.03   # ignore floor noise below 3cm
           obstacle_max_range: 3.0     # depth camera useful range ~3m
           obstacle_min_range: 0.2
@@ -212,7 +212,7 @@ global_costmap:
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
         cost_scaling_factor: 3.0      # how fast cost drops with distance
-        inflation_radius: 0.35        # 35cm inflation — enough clearance for doorways
+        inflation_radius: 0.50        # 35cm inflation — enough clearance for doorways
 
 # ─── Local Costmap ───
 local_costmap:
@@ -246,7 +246,7 @@ local_costmap:
         depth:
           topic: /depth_cam/depth/points
           data_type: PointCloud2
-          max_obstacle_height: 0.50   # detect obstacles up to 50cm
+          max_obstacle_height: 0.80   # detect obstacles up to 50cm
           min_obstacle_height: 0.03   # ignore floor noise
           obstacle_max_range: 3.0
           obstacle_min_range: 0.2
@@ -258,7 +258,7 @@ local_costmap:
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
         cost_scaling_factor: 3.0
-        inflation_radius: 0.35
+        inflation_radius: 0.50
 
 # ─── Velocity Smoother ───
 velocity_smoother:
