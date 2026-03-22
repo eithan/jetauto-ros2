@@ -10,7 +10,8 @@ republishes cmd_vel immediately. We must CANCEL the goal too.
 """
 
 import math
-from typing import Optional
+import time
+from typing import Optional, Tuple
 
 import rclpy
 from rclpy.node import Node
@@ -20,6 +21,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 from nav2_msgs.action import NavigateToPose
 
@@ -31,20 +33,30 @@ class SafetyMonitor(Node):
         super().__init__('safety_monitor')
 
         # Parameters
-        self.declare_parameter('min_obstacle_distance', 0.20)  # 20cm (was 15cm — too tight)
+        self.declare_parameter('min_obstacle_distance', 0.20)  # 20cm
         self.declare_parameter('warn_obstacle_distance', 0.35)  # 35cm
-        self.declare_parameter('check_frequency', 20.0)  # 20Hz (was 10Hz — need to beat Nav2)
-        self.declare_parameter('resume_distance', 0.40)  # must back off to 40cm before clearing
+        self.declare_parameter('check_frequency', 20.0)  # 20Hz
+        self.declare_parameter('resume_distance', 0.40)  # must back off to 40cm
+        self.declare_parameter('stuck_timeout', 5.0)  # seconds without progress = stuck
+        self.declare_parameter('stuck_move_threshold', 0.02)  # 2cm minimum movement
 
         self.min_dist = self.get_parameter('min_obstacle_distance').value
         self.warn_dist = self.get_parameter('warn_obstacle_distance').value
         self.resume_dist = self.get_parameter('resume_distance').value
+        self.stuck_timeout = self.get_parameter('stuck_timeout').value
+        self.stuck_move_threshold = self.get_parameter('stuck_move_threshold').value
 
         # State
         self._latest_scan: Optional[LaserScan] = None
         self._estop_active = False
         self._estop_count = 0
         self._goal_canceled = False
+
+        # Stuck detection state
+        self._last_cmd_vel: Optional[Twist] = None
+        self._last_position: Optional[Tuple[float, float]] = None
+        self._last_move_time: float = time.time()
+        self._stuck_estop_active = False
 
         # Publishers — cmd_vel at high QoS priority
         self._cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -54,6 +66,13 @@ class SafetyMonitor(Node):
         self._scan_sub = self.create_subscription(
             LaserScan, '/scan', self._scan_callback,
             QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
+        )
+        self._odom_sub = self.create_subscription(
+            Odometry, '/odom', self._odom_callback,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
+        )
+        self._cmd_vel_sub = self.create_subscription(
+            Twist, '/cmd_vel', self._cmd_vel_callback, 10,
         )
 
         # Nav2 action client — to cancel goals
@@ -74,6 +93,27 @@ class SafetyMonitor(Node):
     def _scan_callback(self, msg: LaserScan):
         """Store latest lidar scan."""
         self._latest_scan = msg
+
+    def _odom_callback(self, msg: Odometry):
+        """Track robot position for stuck detection."""
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+
+        if self._last_position is not None:
+            dx = x - self._last_position[0]
+            dy = y - self._last_position[1]
+            dist = math.sqrt(dx * dx + dy * dy)
+            if dist > self.stuck_move_threshold:
+                self._last_move_time = time.time()
+                if self._stuck_estop_active:
+                    self.get_logger().info('✅ Stuck e-stop cleared — robot is moving again')
+                    self._stuck_estop_active = False
+
+        self._last_position = (x, y)
+
+    def _cmd_vel_callback(self, msg: Twist):
+        """Track velocity commands for stuck detection."""
+        self._last_cmd_vel = msg
 
     def _safety_check(self):
         """Check for dangerously close obstacles."""
@@ -132,6 +172,34 @@ class SafetyMonitor(Node):
                 stop = Twist()
                 self._cmd_pub.publish(stop)
 
+        # ── Stuck detection ──
+        # If motors are running but robot hasn't moved, it's stuck on something
+        if self._last_cmd_vel is not None and not self._estop_active:
+            cmd = self._last_cmd_vel
+            is_commanded = (
+                abs(cmd.linear.x) > 0.01 or
+                abs(cmd.linear.y) > 0.01 or
+                abs(cmd.angular.z) > 0.05
+            )
+
+            if is_commanded:
+                time_since_move = time.time() - self._last_move_time
+                if time_since_move > self.stuck_timeout and not self._stuck_estop_active:
+                    self._stuck_estop_active = True
+                    self._estop_count += 1
+                    self.get_logger().error(
+                        f'🛑 STUCK DETECTED #{self._estop_count} — '
+                        f'no movement for {time_since_move:.1f}s despite motor commands. '
+                        f'Canceling Nav2 goals.'
+                    )
+                    stop = Twist()
+                    self._cmd_pub.publish(stop)
+                    self._cancel_nav2_goals()
+
+                if self._stuck_estop_active:
+                    stop = Twist()
+                    self._cmd_pub.publish(stop)
+
     def _cancel_nav2_goals(self):
         """Cancel all active Nav2 goals."""
         self.get_logger().warn('Canceling all Nav2 goals...')
@@ -155,13 +223,17 @@ def main(args=None):
     node = SafetyMonitor()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
+        pass
+    finally:
         node.get_logger().info(
             f'Safety monitor stopped. Total e-stops: {node._estop_count}'
         )
-    finally:
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':

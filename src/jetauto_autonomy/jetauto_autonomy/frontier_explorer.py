@@ -405,14 +405,18 @@ def main(args=None):
     node = FrontierExplorer()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
+        pass
+    finally:
         node.get_logger().info(
             f'Explorer stopped. Goals: {node._goals_sent} sent, '
             f'{node._goals_reached} reached'
         )
-    finally:
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':
