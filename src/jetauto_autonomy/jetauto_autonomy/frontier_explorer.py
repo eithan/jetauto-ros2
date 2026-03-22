@@ -286,18 +286,18 @@ class FrontierExplorer(Node):
         if robot_pos is None:
             return
 
-        # Verify robot is within the map bounds
+        # Verify robot is roughly within the map bounds (0.5m tolerance for edge cases)
         info = self._map.info
-        map_x_min = info.origin.position.x
-        map_y_min = info.origin.position.y
-        map_x_max = map_x_min + info.width * info.resolution
-        map_y_max = map_y_min + info.height * info.resolution
+        margin = 0.5  # meters of tolerance
+        map_x_min = info.origin.position.x - margin
+        map_y_min = info.origin.position.y - margin
+        map_x_max = info.origin.position.x + info.width * info.resolution + margin
+        map_y_max = info.origin.position.y + info.height * info.resolution + margin
         rx, ry = robot_pos
 
         if not (map_x_min < rx < map_x_max and map_y_min < ry < map_y_max):
             self.get_logger().warn(
-                f'Robot ({rx:.2f}, {ry:.2f}) outside map bounds '
-                f'({map_x_min:.2f},{map_y_min:.2f})-({map_x_max:.2f},{map_y_max:.2f}). '
+                f'Robot ({rx:.2f}, {ry:.2f}) far outside map bounds. '
                 f'Waiting for SLAM to expand...'
             )
             return
