@@ -108,7 +108,7 @@ echo -e "${YELLOW}  Ctrl+C to stop everything             ${NC}"
 echo -e "${YELLOW}═══════════════════════════════════════${NC}"
 echo ""
 
-ros2 run jetauto_autonomy frontier_explorer --ros-args --log-level info &
+ros2 run jetauto_autonomy frontier_explorer --ros-args --log-level info 2>&1 | tee "$LOG_DIR/frontier.log" &
 EXPLORER_PID=$!
 
 # Wait for explorer to finish (or Ctrl+C)
