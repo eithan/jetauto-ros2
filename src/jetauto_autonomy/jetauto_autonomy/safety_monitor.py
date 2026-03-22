@@ -23,6 +23,7 @@ from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 from nav2_msgs.action import NavigateToPose
+from action_msgs.srv import CancelGoal
 from tf2_ros import Buffer, TransformListener
 
 
@@ -46,6 +47,10 @@ class SafetyMonitor(Node):
         self.stuck_timeout = self.get_parameter('stuck_timeout').value
         self.stuck_move_threshold = self.get_parameter('stuck_move_threshold').value
 
+        # How long to hold stuck e-stop before allowing resume
+        self.declare_parameter('stuck_hold_time', 15.0)  # hold for 15 seconds
+        self.stuck_hold_time = self.get_parameter('stuck_hold_time').value
+
         # State
         self._latest_scan: Optional[LaserScan] = None
         self._estop_active = False
@@ -57,6 +62,7 @@ class SafetyMonitor(Node):
         self._last_slam_position: Optional[Tuple[float, float]] = None
         self._last_move_time: float = time.time()
         self._stuck_estop_active = False
+        self._stuck_estop_start: float = 0.0  # when stuck e-stop was triggered
 
         # TF listener for SLAM-based position (immune to wheel slip)
         self._tf_buffer = Buffer()
@@ -75,9 +81,9 @@ class SafetyMonitor(Node):
             Twist, '/cmd_vel', self._cmd_vel_callback, 10,
         )
 
-        # Nav2 action client — to cancel goals
-        self._nav_client = ActionClient(
-            self, NavigateToPose, 'navigate_to_pose',
+        # Nav2 cancel service — to cancel goals (Humble compatible)
+        self._cancel_client = self.create_client(
+            CancelGoal, '/navigate_to_pose/_action/cancel_goal',
             callback_group=ReentrantCallbackGroup(),
         )
 
@@ -121,9 +127,14 @@ class SafetyMonitor(Node):
             dist = math.sqrt(dx * dx + dy * dy)
             if dist > self.stuck_move_threshold:
                 self._last_move_time = time.time()
+                # Only clear stuck if hold time has elapsed (prevent rapid on/off cycling)
                 if self._stuck_estop_active:
-                    self.get_logger().info('✅ Stuck e-stop cleared — robot is moving again')
-                    self._stuck_estop_active = False
+                    held = time.time() - self._stuck_estop_start
+                    if held >= self.stuck_hold_time:
+                        self.get_logger().info(
+                            f'✅ Stuck e-stop cleared — robot moved after {held:.0f}s hold'
+                        )
+                        self._stuck_estop_active = False
 
         self._last_slam_position = pos
 
@@ -199,6 +210,7 @@ class SafetyMonitor(Node):
                 time_since_move = time.time() - self._last_move_time
                 if time_since_move > self.stuck_timeout and not self._stuck_estop_active:
                     self._stuck_estop_active = True
+                    self._stuck_estop_start = time.time()
                     self._estop_count += 1
                     self.get_logger().error(
                         f'🛑 STUCK DETECTED #{self._estop_count} — '
@@ -214,11 +226,16 @@ class SafetyMonitor(Node):
                     self._cmd_pub.publish(stop)
 
     def _cancel_nav2_goals(self):
-        """Cancel all active Nav2 goals."""
+        """Cancel all active Nav2 goals via cancel service."""
         self.get_logger().warn('Canceling all Nav2 goals...')
         try:
-            cancel_future = self._nav_client.cancel_all_goals_async()
-            cancel_future.add_done_callback(self._cancel_done)
+            if not self._cancel_client.service_is_ready():
+                self.get_logger().warn('Cancel service not ready')
+                return
+            request = CancelGoal.Request()
+            # Empty goal_info = cancel ALL goals
+            future = self._cancel_client.call_async(request)
+            future.add_done_callback(self._cancel_done)
         except Exception as e:
             self.get_logger().warn(f'Could not cancel Nav2 goals: {e}')
 
@@ -226,7 +243,7 @@ class SafetyMonitor(Node):
         """Callback for goal cancellation."""
         try:
             result = future.result()
-            self.get_logger().info('Nav2 goals canceled')
+            self.get_logger().info(f'Nav2 goals canceled (return_code={result.return_code})')
         except Exception as e:
             self.get_logger().warn(f'Goal cancel result error: {e}')
 
