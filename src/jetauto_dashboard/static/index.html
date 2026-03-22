@@ -314,6 +314,27 @@ html, body {
 
 .control-sep { width: 1px; height: 28px; background: var(--border); }
 
+.explore-btn {
+  background: rgba(92, 224, 255, 0.1);
+  border: 1px solid rgba(92, 224, 255, 0.3);
+  border-radius: 12px;
+  padding: 10px 24px;
+  color: var(--cyan);
+  font-size: 13px; font-weight: 600; letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex; align-items: center; gap: 8px;
+}
+.explore-btn:hover { background: rgba(92, 224, 255, 0.2); border-color: var(--cyan); box-shadow: 0 0 15px rgba(92, 224, 255, 0.2); }
+.explore-btn.running {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: var(--red);
+  animation: pulse-red 1.5s ease-in-out infinite;
+}
+.explore-btn.running:hover { background: rgba(239, 68, 68, 0.3); border-color: var(--red); }
+
 .shutdown-btn {
   background: rgba(239,68,68,0.1);
   border: 1px solid rgba(239,68,68,0.3);
@@ -592,6 +613,12 @@ html, body {
 
     <div class="control-sep"></div>
 
+    <button class="explore-btn" id="exploreBtn" onclick="handleExplore()">
+      <span>🗺</span> Explore
+    </button>
+
+    <div class="control-sep"></div>
+
     <button class="shutdown-btn" id="shutdownBtn" onclick="handleShutdown()">
       <span>⏻</span> Shutdown
     </button>
@@ -618,6 +645,7 @@ html, body {
 // ── State ─────────────────────────────────────────────
 let voiceEnabled  = false;
 let visionEnabled = false;
+let exploreRunning = false;
 let shutdownPending = false;
 let shutdownTimer = null;
 
@@ -685,6 +713,10 @@ socket.on('state', (s) => {
   updateDetections(s.detections);
   voiceEnabled  = s.voice_enabled;
   visionEnabled = s.vision_enabled;
+  if (s.explore_running !== undefined) {
+    exploreRunning = s.explore_running;
+    syncExploreBtn();
+  }
   syncToggles();
   // Voice overlay: close when voice pipeline signals it's ready
   // (voice_commander publishes 'ready' once OWW+Whisper loaded and audio loop starts)
@@ -808,6 +840,23 @@ function onVolumeChange(val) {
   _volumeDebounce = setTimeout(() => {
     socket.emit('set_volume', { volume: val / 100 });
   }, 150);
+}
+
+function syncExploreBtn() {
+  const btn = document.getElementById('exploreBtn');
+  if (exploreRunning) {
+    btn.className = 'explore-btn running';
+    btn.innerHTML = '<span>🛑</span> Stop Explore';
+  } else {
+    btn.className = 'explore-btn';
+    btn.innerHTML = '<span>🗺</span> Explore';
+  }
+}
+
+function handleExplore() {
+  exploreRunning = !exploreRunning;
+  syncExploreBtn();
+  socket.emit('toggle_explore', { enabled: exploreRunning });
 }
 
 function handleShutdown() {

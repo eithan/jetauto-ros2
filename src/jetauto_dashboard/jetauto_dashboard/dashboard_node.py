@@ -52,6 +52,7 @@ class DashboardNode(Node):
         self._detector_proc = None  # detector_node only
         self._tts_proc = None       # tts_node only (shared by voice & vision)
         self._caption_proc = None   # caption_node (Florence-2, vision only)
+        self._explore_proc = None   # autonomous exploration (explore.sh)
 
         # -- State --
         self.state = {
@@ -64,6 +65,7 @@ class DashboardNode(Node):
             'voice_state': 'idle',  # idle | listening | processing | speaking
             'detections': [],       # last 5 detected objects
             'uptime': 0,
+            'explore_running': False,
         }
 
         # -- QoS for latched/transient local topics --
@@ -455,8 +457,41 @@ class DashboardNode(Node):
         self._kill_proc(self._caption_proc, 'Caption')
         self._caption_proc = None
 
+    # -- Explore (autonomous exploration) --
+
+    def _launch_explore(self):
+        """Launch autonomous exploration via explore.sh."""
+        if self._proc_alive(self._explore_proc):
+            return
+        explore_script = os.path.join(
+            os.path.expanduser('~'), 'ros2_ws', 'src', 'jetauto-ros2',
+            'src', 'jetauto_autonomy', 'scripts', 'explore.sh'
+        )
+        try:
+            self._explore_proc = subprocess.Popen(
+                ['bash', explore_script],
+                preexec_fn=os.setsid,
+            )
+            self.get_logger().info(f'Explore launched (pid {self._explore_proc.pid})')
+        except Exception as e:
+            self.get_logger().error(f'Failed to launch explore: {e}')
+
+    def _kill_explore(self):
+        """Stop exploration via estop.sh then kill the process."""
+        estop_script = os.path.join(
+            os.path.expanduser('~'), 'ros2_ws', 'src', 'jetauto-ros2',
+            'src', 'jetauto_autonomy', 'scripts', 'estop.sh'
+        )
+        try:
+            subprocess.run(['bash', estop_script], timeout=10)
+        except Exception as e:
+            self.get_logger().warn(f'estop.sh error: {e}')
+        self._kill_proc(self._explore_proc, 'Explore')
+        self._explore_proc = None
+
     def cleanup_subprocesses(self):
         """Kill any managed subprocesses on shutdown."""
+        self._kill_explore()
         self._kill_voice()
         self._kill_detector()
         self._kill_caption()
@@ -529,6 +564,17 @@ class DashboardNode(Node):
 
         threading.Thread(target=_do_shutdown, daemon=True).start()
 
+    def toggle_explore(self, enabled: bool):
+        self.state['explore_running'] = enabled
+        self._emit_state()
+
+        if enabled:
+            self._launch_explore()
+        else:
+            self._kill_explore()
+
+        self.get_logger().info(f'Explore {"started" if enabled else "stopped"}')
+
     def speak(self, text: str):
         msg = String()
         msg.data = text
@@ -578,6 +624,10 @@ def create_app(node: DashboardNode):
         msg = Float32()
         msg.data = vol
         node.pub_volume.publish(msg)
+
+    @socketio.on('toggle_explore')
+    def on_toggle_explore(data):
+        node.toggle_explore(data.get('enabled', False))
 
     @socketio.on('shutdown')
     def on_shutdown():
