@@ -186,7 +186,7 @@ global_costmap:
       obstacle_layer:
         plugin: nav2_costmap_2d::ObstacleLayer
         enabled: true
-        observation_sources: scan
+        observation_sources: scan depth
         scan:
           topic: /scan
           max_obstacle_height: 2.0
@@ -197,6 +197,18 @@ global_costmap:
           raytrace_min_range: 0.0
           obstacle_max_range: 6.0
           obstacle_min_range: 0.0
+        depth:
+          topic: /depth_cam/depth/points
+          data_type: PointCloud2
+          max_obstacle_height: 0.50   # detect obstacles up to 50cm (beds, chairs, tables)
+          min_obstacle_height: 0.03   # ignore floor noise below 3cm
+          obstacle_max_range: 3.0     # depth camera useful range ~3m
+          obstacle_min_range: 0.2
+          raytrace_max_range: 3.5
+          raytrace_min_range: 0.2
+          clearing: true
+          marking: true
+          sensor_frame: depth_cam_link
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
         cost_scaling_factor: 3.0      # how fast cost drops with distance
@@ -220,7 +232,7 @@ local_costmap:
       obstacle_layer:
         plugin: nav2_costmap_2d::ObstacleLayer
         enabled: true
-        observation_sources: scan
+        observation_sources: scan depth
         scan:
           topic: /scan
           max_obstacle_height: 2.0
@@ -231,6 +243,18 @@ local_costmap:
           raytrace_min_range: 0.0
           obstacle_max_range: 6.0
           obstacle_min_range: 0.0
+        depth:
+          topic: /depth_cam/depth/points
+          data_type: PointCloud2
+          max_obstacle_height: 0.50   # detect obstacles up to 50cm
+          min_obstacle_height: 0.03   # ignore floor noise
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.2
+          raytrace_max_range: 3.5
+          raytrace_min_range: 0.2
+          clearing: true
+          marking: true
+          sensor_frame: depth_cam_link
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
         cost_scaling_factor: 3.0
