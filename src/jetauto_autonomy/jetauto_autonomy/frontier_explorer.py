@@ -31,7 +31,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
 from nav_msgs.msg import OccupancyGrid
-from geometry_msgs.msg import PoseStamped, Point
+from geometry_msgs.msg import PoseStamped, Point, PointStamped
 from nav2_msgs.action import NavigateToPose
 from action_msgs.msg import GoalStatus
 from tf2_ros import Buffer, TransformListener, LookupException
@@ -75,12 +75,17 @@ class FrontierExplorer(Node):
         self.goal_timeout = self.get_parameter('goal_timeout').value
         self.replan_interval = self.get_parameter('replan_interval').value
 
+        # Stuck location blacklist radius (larger than failed goal radius)
+        self.declare_parameter('stuck_blacklist_radius', 1.0)  # 1m around stuck spots
+        self.stuck_blacklist_radius = self.get_parameter('stuck_blacklist_radius').value
+
         # State
         self._map: Optional[OccupancyGrid] = None
         self._exploring = False
         self._start_time = None
         self._current_goal_handle = None
         self._failed_goals: List[Tuple[float, float]] = []
+        self._stuck_locations: List[Tuple[float, float]] = []  # from safety_monitor
         self._goals_sent = 0
         self._goals_reached = 0
 
@@ -96,6 +101,11 @@ class FrontierExplorer(Node):
         )
         self._map_sub = self.create_subscription(
             OccupancyGrid, '/map', self._map_callback, map_qos
+        )
+
+        # Stuck location subscriber (from safety_monitor)
+        self._stuck_sub = self.create_subscription(
+            PointStamped, '/stuck_locations', self._stuck_callback, 10
         )
 
         # Nav2 action client
@@ -122,6 +132,15 @@ class FrontierExplorer(Node):
     def _map_callback(self, msg: OccupancyGrid):
         """Store latest map."""
         self._map = msg
+
+    def _stuck_callback(self, msg: PointStamped):
+        """Receive stuck locations from safety_monitor — blacklist with larger radius."""
+        loc = (msg.point.x, msg.point.y)
+        self._stuck_locations.append(loc)
+        self.get_logger().warn(
+            f'[{_ts()}] ⚠️ Received stuck location ({loc[0]:.2f}, {loc[1]:.2f}) — '
+            f'blacklisting {self.stuck_blacklist_radius}m radius'
+        )
 
     def _get_robot_position(self) -> Optional[Tuple[float, float]]:
         """Get robot position in map frame."""
@@ -227,9 +246,14 @@ class FrontierExplorer(Node):
             (wx - robot_pos[0]) ** 2 + (wy - robot_pos[1]) ** 2
         )
 
-        # Skip frontiers too close to previously failed goals
+        # Skip frontiers too close to previously failed goals (0.5m radius)
         for fx, fy in self._failed_goals:
             if math.sqrt((wx - fx) ** 2 + (wy - fy) ** 2) < 0.5:
+                return -1.0
+
+        # Skip frontiers near stuck locations (larger radius — these are physical obstacles)
+        for sx, sy in self._stuck_locations:
+            if math.sqrt((wx - sx) ** 2 + (wy - sy) ** 2) < self.stuck_blacklist_radius:
                 return -1.0
 
         # Score: size bonus - distance penalty

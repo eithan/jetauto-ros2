@@ -4,6 +4,7 @@ Monitors lidar scans for dangerously close obstacles and:
 1. Publishes zero-velocity commands at HIGH FREQUENCY to override Nav2
 2. Cancels the active Nav2 goal so it stops trying to drive
 3. Publishes /safety_status for other nodes to check
+4. Executes recovery maneuvers (backup + strafe) when stuck
 
 The key insight: just publishing zero velocity doesn't work because Nav2
 republishes cmd_vel immediately. We must CANCEL the goal too.
@@ -21,7 +22,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from rclpy.callback_groups import ReentrantCallbackGroup
 
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, PointStamped
 from std_msgs.msg import String
 from nav2_msgs.action import NavigateToPose
 from action_msgs.srv import CancelGoal
@@ -36,6 +37,12 @@ def _ts():
 class SafetyMonitor(Node):
     """Emergency stop and safety monitoring for autonomous navigation."""
 
+    # Recovery maneuver states
+    RECOVERY_NONE = 0
+    RECOVERY_BACKUP = 1
+    RECOVERY_STRAFE = 2
+    RECOVERY_HOLD = 3
+
     def __init__(self):
         super().__init__('safety_monitor')
 
@@ -46,37 +53,59 @@ class SafetyMonitor(Node):
         self.declare_parameter('resume_distance', 0.40)  # must back off to 40cm
         self.declare_parameter('stuck_timeout', 5.0)  # seconds without progress = stuck
         self.declare_parameter('stuck_move_threshold', 0.02)  # 2cm minimum movement
+        self.declare_parameter('stuck_hold_time', 15.0)  # hold for 15 seconds
+        self.declare_parameter('startup_grace_period', 10.0)  # ignore stuck for first 10s
+        self.declare_parameter('cmd_active_threshold', 3.0)  # commands must be active 3s before stuck counts
+        self.declare_parameter('recovery_backup_speed', -0.15)  # m/s backward
+        self.declare_parameter('recovery_strafe_speed', 0.20)  # m/s sideways
+        self.declare_parameter('recovery_backup_duration', 1.5)  # seconds
+        self.declare_parameter('recovery_strafe_duration', 1.0)  # seconds
 
         self.min_dist = self.get_parameter('min_obstacle_distance').value
         self.warn_dist = self.get_parameter('warn_obstacle_distance').value
         self.resume_dist = self.get_parameter('resume_distance').value
         self.stuck_timeout = self.get_parameter('stuck_timeout').value
         self.stuck_move_threshold = self.get_parameter('stuck_move_threshold').value
-
-        # How long to hold stuck e-stop before allowing resume
-        self.declare_parameter('stuck_hold_time', 15.0)  # hold for 15 seconds
         self.stuck_hold_time = self.get_parameter('stuck_hold_time').value
+        self.startup_grace = self.get_parameter('startup_grace_period').value
+        self.cmd_active_threshold = self.get_parameter('cmd_active_threshold').value
+        self.recovery_backup_speed = self.get_parameter('recovery_backup_speed').value
+        self.recovery_strafe_speed = self.get_parameter('recovery_strafe_speed').value
+        self.recovery_backup_duration = self.get_parameter('recovery_backup_duration').value
+        self.recovery_strafe_duration = self.get_parameter('recovery_strafe_duration').value
 
         # State
         self._latest_scan: Optional[LaserScan] = None
         self._estop_active = False
         self._estop_count = 0
         self._goal_canceled = False
+        self._node_start_time = time.time()
 
         # Stuck detection state (uses SLAM position, not odometry)
         self._last_cmd_vel: Optional[Twist] = None
         self._last_slam_position: Optional[Tuple[float, float]] = None
         self._last_move_time: float = time.time()
         self._stuck_estop_active = False
-        self._stuck_estop_start: float = 0.0  # when stuck e-stop was triggered
+        self._stuck_estop_start: float = 0.0
+
+        # Command activity tracking — when did continuous motor commands start?
+        self._cmd_active_since: Optional[float] = None  # None = motors idle
+
+        # Recovery maneuver state
+        self._recovery_state = self.RECOVERY_NONE
+        self._recovery_start: float = 0.0
+        self._recovery_direction: int = 1  # +1 = strafe left, -1 = strafe right (alternates)
+        self._recovery_count = 0
 
         # TF listener for SLAM-based position (immune to wheel slip)
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
-        # Publishers — cmd_vel at high QoS priority
+        # Publishers
         self._cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self._status_pub = self.create_publisher(String, '/safety_status', 10)
+        # Publish stuck locations so frontier_explorer can avoid them
+        self._stuck_pub = self.create_publisher(PointStamped, '/stuck_locations', 10)
 
         # Subscribers
         self._scan_sub = self.create_subscription(
@@ -87,7 +116,7 @@ class SafetyMonitor(Node):
             Twist, '/cmd_vel', self._cmd_vel_callback, 10,
         )
 
-        # Nav2 cancel service — to cancel goals (Humble compatible)
+        # Nav2 cancel service
         self._cancel_client = self.create_client(
             CancelGoal, '/navigate_to_pose/_action/cancel_goal',
             callback_group=ReentrantCallbackGroup(),
@@ -103,11 +132,9 @@ class SafetyMonitor(Node):
         )
 
     def _scan_callback(self, msg: LaserScan):
-        """Store latest lidar scan."""
         self._latest_scan = msg
 
     def _cmd_vel_callback(self, msg: Twist):
-        """Track velocity commands for stuck detection."""
         self._last_cmd_vel = msg
 
     def _get_slam_position(self) -> Optional[Tuple[float, float]]:
@@ -133,8 +160,8 @@ class SafetyMonitor(Node):
             dist = math.sqrt(dx * dx + dy * dy)
             if dist > self.stuck_move_threshold:
                 self._last_move_time = time.time()
-                # Only clear stuck if hold time has elapsed (prevent rapid on/off cycling)
-                if self._stuck_estop_active:
+                # Clear stuck if hold time has elapsed
+                if self._stuck_estop_active and self._recovery_state == self.RECOVERY_NONE:
                     held = time.time() - self._stuck_estop_start
                     if held >= self.stuck_hold_time:
                         self.get_logger().info(
@@ -144,15 +171,89 @@ class SafetyMonitor(Node):
 
         self._last_slam_position = pos
 
+    def _publish_stuck_location(self):
+        """Publish the current position as a stuck location for other nodes."""
+        pos = self._get_slam_position()
+        if pos is None:
+            return
+        msg = PointStamped()
+        msg.header.frame_id = 'map'
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.point.x = pos[0]
+        msg.point.y = pos[1]
+        msg.point.z = 0.0
+        self._stuck_pub.publish(msg)
+
+    def _execute_recovery(self):
+        """State machine for recovery maneuver (backup + strafe)."""
+        elapsed = time.time() - self._recovery_start
+        cmd = Twist()
+
+        if self._recovery_state == self.RECOVERY_BACKUP:
+            if elapsed < self.recovery_backup_duration:
+                # Drive backward
+                cmd.linear.x = self.recovery_backup_speed
+                self._cmd_pub.publish(cmd)
+            else:
+                # Transition to strafe
+                self._recovery_state = self.RECOVERY_STRAFE
+                self._recovery_start = time.time()
+                self.get_logger().info(
+                    f'[{_ts()}] 🔄 Recovery: strafing {"left" if self._recovery_direction > 0 else "right"}...'
+                )
+
+        elif self._recovery_state == self.RECOVERY_STRAFE:
+            if elapsed < self.recovery_strafe_duration:
+                # Strafe sideways (mecanum advantage!)
+                cmd.linear.y = self.recovery_strafe_speed * self._recovery_direction
+                self._cmd_pub.publish(cmd)
+            else:
+                # Done — transition to hold
+                self._recovery_state = self.RECOVERY_HOLD
+                self._recovery_start = time.time()
+                stop = Twist()
+                self._cmd_pub.publish(stop)
+                self.get_logger().info(
+                    f'[{_ts()}] ✅ Recovery maneuver complete — holding for replan'
+                )
+                # Reset move time so stuck detection doesn't immediately re-trigger
+                self._last_move_time = time.time()
+
+        elif self._recovery_state == self.RECOVERY_HOLD:
+            # Hold for a few seconds, then clear
+            stop = Twist()
+            self._cmd_pub.publish(stop)
+            if elapsed >= 3.0:
+                self._recovery_state = self.RECOVERY_NONE
+                self._stuck_estop_active = False
+                self.get_logger().info(
+                    f'[{_ts()}] 🟢 Recovery hold complete — resuming exploration'
+                )
+
+    def _start_recovery(self):
+        """Initiate recovery maneuver after stuck detection."""
+        self._recovery_count += 1
+        self._recovery_state = self.RECOVERY_BACKUP
+        self._recovery_start = time.time()
+        # Alternate strafe direction each time
+        self._recovery_direction = 1 if self._recovery_count % 2 == 1 else -1
+        self.get_logger().info(
+            f'[{_ts()}] 🔄 Recovery #{self._recovery_count}: backing up...'
+        )
+
     def _safety_check(self):
-        """Check for dangerously close obstacles."""
+        """Main safety loop at 20Hz."""
+        # If recovery maneuver is active, execute it and skip normal checks
+        if self._recovery_state != self.RECOVERY_NONE:
+            self._execute_recovery()
+            return
+
         if self._latest_scan is None:
             return
 
         scan = self._latest_scan
         min_reading = float('inf')
 
-        # Find closest valid reading
         for i, r in enumerate(scan.ranges):
             if scan.range_min <= r <= scan.range_max:
                 if r < min_reading:
@@ -168,10 +269,9 @@ class SafetyMonitor(Node):
             status.data = f'OK:closest={min_reading:.3f}m'
         self._status_pub.publish(status)
 
-        # Emergency stop
+        # Lidar-based emergency stop
         if min_reading < self.min_dist:
-            # Always publish zero velocity when in e-stop zone
-            stop = Twist()  # all zeros
+            stop = Twist()
             self._cmd_pub.publish(stop)
 
             if not self._estop_active:
@@ -183,26 +283,26 @@ class SafetyMonitor(Node):
                     f'obstacle at {min_reading:.3f}m (threshold: {self.min_dist}m)'
                 )
 
-            # Cancel Nav2 goal (only once per e-stop event)
             if not self._goal_canceled:
                 self._cancel_nav2_goals()
                 self._goal_canceled = True
 
         elif self._estop_active:
-            # Use hysteresis — don't clear until obstacle is well clear
             if min_reading >= self.resume_dist:
                 self.get_logger().info(
-                    f'[{_ts()}] ✅ E-stop cleared — closest obstacle at {min_reading:.3f}m '
-                    f'(resume threshold: {self.resume_dist}m)'
+                    f'[{_ts()}] ✅ E-stop cleared — closest obstacle at {min_reading:.3f}m'
                 )
                 self._estop_active = False
             else:
-                # Still too close — keep sending zero velocity
                 stop = Twist()
                 self._cmd_pub.publish(stop)
 
-        # ── Stuck detection (SLAM-based, immune to wheel slip) ──
+        # ── Stuck detection (SLAM-based) ──
         self._check_stuck()
+
+        # Don't check stuck during startup grace period
+        if time.time() - self._node_start_time < self.startup_grace:
+            return
 
         if self._last_cmd_vel is not None and not self._estop_active:
             cmd = self._last_cmd_vel
@@ -213,6 +313,15 @@ class SafetyMonitor(Node):
             )
 
             if is_commanded:
+                # Track when continuous commands started
+                if self._cmd_active_since is None:
+                    self._cmd_active_since = time.time()
+
+                # Only consider stuck if commands have been active for cmd_active_threshold
+                cmd_duration = time.time() - self._cmd_active_since
+                if cmd_duration < self.cmd_active_threshold:
+                    return  # too early to call it stuck
+
                 time_since_move = time.time() - self._last_move_time
                 if time_since_move > self.stuck_timeout and not self._stuck_estop_active:
                     self._stuck_estop_active = True
@@ -220,16 +329,22 @@ class SafetyMonitor(Node):
                     self._estop_count += 1
                     self.get_logger().error(
                         f'[{_ts()}] 🛑 STUCK DETECTED #{self._estop_count} — '
-                        f'no SLAM movement for {time_since_move:.1f}s despite motor commands. '
-                        f'Canceling Nav2 goals.'
+                        f'no SLAM movement for {time_since_move:.1f}s despite '
+                        f'{cmd_duration:.1f}s of motor commands. Starting recovery.'
                     )
-                    stop = Twist()
-                    self._cmd_pub.publish(stop)
+                    # Cancel Nav2 goal first
                     self._cancel_nav2_goals()
+                    # Publish stuck location for frontier_explorer
+                    self._publish_stuck_location()
+                    # Start recovery maneuver (backup + strafe)
+                    self._start_recovery()
 
-                if self._stuck_estop_active:
+                if self._stuck_estop_active and self._recovery_state == self.RECOVERY_NONE:
                     stop = Twist()
                     self._cmd_pub.publish(stop)
+            else:
+                # Motors idle — reset command tracking
+                self._cmd_active_since = None
 
     def _cancel_nav2_goals(self):
         """Cancel all active Nav2 goals via cancel service."""
@@ -239,14 +354,12 @@ class SafetyMonitor(Node):
                 self.get_logger().warn('Cancel service not ready')
                 return
             request = CancelGoal.Request()
-            # Empty goal_info = cancel ALL goals
             future = self._cancel_client.call_async(request)
             future.add_done_callback(self._cancel_done)
         except Exception as e:
             self.get_logger().warn(f'Could not cancel Nav2 goals: {e}')
 
     def _cancel_done(self, future):
-        """Callback for goal cancellation."""
         try:
             result = future.result()
             self.get_logger().info(f'Nav2 goals canceled (return_code={result.return_code})')
