@@ -66,7 +66,9 @@ class DashboardNode(Node):
             'detections': [],       # last 5 detected objects
             'uptime': 0,
             'explore_running': False,
+            'explore_announce': False,  # TTS announcements for explore events
         }
+        self._explore_events = []  # last N explore events for the UI
 
         # -- QoS for latched/transient local topics --
         qos_best_effort = QoSProfile(
@@ -110,6 +112,10 @@ class DashboardNode(Node):
         # Florence-2 scene captions → TTS
         self.create_subscription(
             String, '/scene_caption', self._on_scene_caption, qos_best_effort)
+
+        # Explore events from frontier_explorer + safety_monitor
+        self.create_subscription(
+            String, '/explore/events', self._on_explore_event, qos_reliable)
 
         if HAS_DETECTION_MSGS:
             self.create_subscription(
@@ -233,6 +239,36 @@ class DashboardNode(Node):
     def _on_scene_caption(self, msg: String):
         """Store latest caption — spoken on demand only (via voice command)."""
         pass  # caption_node → voice_commander handles on-demand speech
+
+    def _on_explore_event(self, msg: String):
+        """Handle exploration events — push to UI and optionally announce via TTS."""
+        ts = datetime.now().strftime('%H:%M:%S')
+        event = {'text': msg.data, 'time': ts}
+
+        # Keep last 20 events
+        self._explore_events.append(event)
+        if len(self._explore_events) > 20:
+            self._explore_events = self._explore_events[-20:]
+
+        # Push to browser
+        try:
+            self.socketio.emit('explore_event', event)
+        except AttributeError:
+            pass
+
+        # TTS announce if enabled
+        if self.state.get('explore_announce'):
+            # Strip emoji for cleaner TTS
+            clean = msg.data
+            for ch in '🗺🚗🧭✅❌🛑🟢🔙🚧⚠️🎉':
+                clean = clean.replace(ch, '')
+            clean = clean.strip()
+            if clean:
+                tts_msg = String()
+                tts_msg.data = clean
+                self.pub_tts.publish(tts_msg)
+
+        self.get_logger().info(f'Explore event: {msg.data}')
 
     def _on_startup(self):
         """Auto-enable voice once on startup."""
@@ -566,6 +602,8 @@ class DashboardNode(Node):
 
     def toggle_explore(self, enabled: bool):
         self.state['explore_running'] = enabled
+        if enabled:
+            self._explore_events.clear()  # fresh event log for new run
         self._emit_state()
 
         if enabled:
@@ -574,6 +612,11 @@ class DashboardNode(Node):
             self._kill_explore()
 
         self.get_logger().info(f'Explore {"started" if enabled else "stopped"}')
+
+    def toggle_explore_announce(self, enabled: bool):
+        self.state['explore_announce'] = enabled
+        self._emit_state()
+        self.get_logger().info(f'Explore announcements {"enabled" if enabled else "disabled"}')
 
     def speak(self, text: str):
         msg = String()
@@ -609,6 +652,9 @@ def create_app(node: DashboardNode):
         socketio.emit('config', {
             'robot_name': node.get_parameter('robot_name').value,
         })
+        # Send explore event history so browser catches up
+        if node._explore_events:
+            socketio.emit('explore_events_history', node._explore_events)
 
     @socketio.on('toggle_voice')
     def on_toggle_voice(data):
@@ -628,6 +674,10 @@ def create_app(node: DashboardNode):
     @socketio.on('toggle_explore')
     def on_toggle_explore(data):
         node.toggle_explore(data.get('enabled', False))
+
+    @socketio.on('toggle_explore_announce')
+    def on_toggle_explore_announce(data):
+        node.toggle_explore_announce(data.get('enabled', False))
 
     @socketio.on('shutdown')
     def on_shutdown():

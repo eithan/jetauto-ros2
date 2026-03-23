@@ -23,7 +23,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist, PointStamped
-from std_msgs.msg import String
+from std_msgs.msg import String, Bool
 from nav2_msgs.action import NavigateToPose
 from action_msgs.srv import CancelGoal
 from tf2_ros import Buffer, TransformListener
@@ -107,6 +107,8 @@ class SafetyMonitor(Node):
         self._status_pub = self.create_publisher(String, '/safety_status', 10)
         # Publish stuck locations so frontier_explorer can avoid them
         self._stuck_pub = self.create_publisher(PointStamped, '/stuck_locations', 10)
+        # Event publisher for dashboard announcements
+        self._event_pub = self.create_publisher(String, '/explore/events', 10)
 
         # Subscribers
         self._scan_sub = self.create_subscription(
@@ -131,6 +133,12 @@ class SafetyMonitor(Node):
             f'[{_ts()}] Safety monitor active — e-stop at {self.min_dist}m, '
             f'warn at {self.warn_dist}m, resume at {self.resume_dist}m'
         )
+
+    def _publish_event(self, text: str):
+        """Publish a safety event for dashboard display/TTS."""
+        msg = String()
+        msg.data = text
+        self._event_pub.publish(msg)
 
     def _scan_callback(self, msg: LaserScan):
         self._latest_scan = msg
@@ -260,6 +268,7 @@ class SafetyMonitor(Node):
                 self.get_logger().info(
                     f'[{_ts()}] 🟢 Recovery hold complete — resuming exploration'
                 )
+                self._publish_event('🟢 Recovery complete — resuming')
 
     def _start_recovery(self):
         """Initiate recovery maneuver after stuck detection."""
@@ -315,6 +324,9 @@ class SafetyMonitor(Node):
                     f'[{_ts()}] 🛑 EMERGENCY STOP #{self._estop_count} — '
                     f'obstacle at {min_reading:.3f}m (threshold: {self.min_dist}m)'
                 )
+                self._publish_event(
+                    f'🛑 Emergency stop — obstacle at {min_reading:.2f}m'
+                )
 
             if not self._goal_canceled:
                 self._cancel_nav2_goals()
@@ -364,6 +376,9 @@ class SafetyMonitor(Node):
                         f'[{_ts()}] 🛑 STUCK DETECTED #{self._estop_count} — '
                         f'no SLAM movement for {time_since_move:.1f}s despite '
                         f'{cmd_duration:.1f}s of motor commands. Starting recovery.'
+                    )
+                    self._publish_event(
+                        f'🛑 Stuck detected — starting recovery maneuver'
                     )
                     # Cancel Nav2 goal first
                     self._cancel_nav2_goals()

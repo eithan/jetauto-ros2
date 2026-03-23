@@ -32,6 +32,7 @@ from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
 from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import PoseStamped, Point, PointStamped
+from std_msgs.msg import String
 from nav2_msgs.action import NavigateToPose
 from action_msgs.msg import GoalStatus
 from tf2_ros import Buffer, TransformListener, LookupException
@@ -130,6 +131,9 @@ class FrontierExplorer(Node):
             callback_group=ReentrantCallbackGroup(),
         )
 
+        # Event publisher for dashboard announcements
+        self._event_pub = self.create_publisher(String, '/explore/events', 10)
+
         # Minimum map size before we start exploring (in cells)
         self.declare_parameter('min_map_cells', 500)  # ~500 free cells before starting
         self.min_map_cells = self.get_parameter('min_map_cells').value
@@ -144,6 +148,12 @@ class FrontierExplorer(Node):
             f'[{_ts()}] Frontier explorer initialized '
             f'(timeout={self.explore_timeout}s, min_frontier={self.min_frontier_size})'
         )
+
+    def _publish_event(self, text: str):
+        """Publish an exploration event for dashboard display/TTS."""
+        msg = String()
+        msg.data = text
+        self._event_pub.publish(msg)
 
     def _map_callback(self, msg: OccupancyGrid):
         """Store latest map."""
@@ -401,6 +411,7 @@ class FrontierExplorer(Node):
                 f'[{_ts()}] Map ready! {free_cells} free cells, '
                 f'{self._map.info.width}x{self._map.info.height} grid'
             )
+            self._publish_event('🗺 Map ready — starting exploration')
 
         # Wait for Nav2
         if not self._nav_client.wait_for_server(timeout_sec=1.0):
@@ -415,6 +426,7 @@ class FrontierExplorer(Node):
         if self._start_time is None:
             self._start_time = time.time()
             self.get_logger().info('Starting frontier exploration!')
+            self._publish_event('🚗 Frontier exploration started')
 
         # ── Retreat-first: after stuck recovery, go back to last good position ──
         if self._retreating and self._last_good_position is not None:
@@ -429,6 +441,7 @@ class FrontierExplorer(Node):
                         f'[{_ts()}] 🔙 Retreating to last safe position '
                         f'({rx:.2f}, {ry:.2f}) — {dist_to_safe:.1f}m away'
                     )
+                    self._publish_event(f'🔙 Retreating to safe position — {dist_to_safe:.1f}m away')
                     self._send_goal(rx, ry, is_retreat=True)
                     return
                 else:
@@ -464,6 +477,10 @@ class FrontierExplorer(Node):
             self.get_logger().info(
                 '🎉 No frontiers found — exploration complete! '
                 f'Goals sent: {self._goals_sent}, reached: {self._goals_reached}'
+            )
+            self._publish_event(
+                f'🎉 Exploration complete! Reached {self._goals_reached} of '
+                f'{self._goals_sent} goals'
             )
             self._explore_timer.cancel()
             return
@@ -514,6 +531,9 @@ class FrontierExplorer(Node):
             f'[{_ts()}] Exploring frontier at ({wx:.2f}, {wy:.2f}) — '
             f'size={len(best_cluster)}, score={best_score:.1f}, '
             f'frontiers_remaining={len(scored)}'
+        )
+        self._publish_event(
+            f'🧭 Heading to frontier — {len(scored)} areas remaining'
         )
 
         self._send_goal(wx, wy)
@@ -578,11 +598,12 @@ class FrontierExplorer(Node):
         if status == GoalStatus.STATUS_SUCCEEDED:
             self.get_logger().info(f'[{_ts()}] ✅ Reached frontier ({x:.2f}, {y:.2f})')
             self._goals_reached += 1
-            # Record this as a safe position for future retreats
             self._last_good_position = (x, y)
+            self._publish_event(f'✅ Reached frontier ({self._goals_reached} explored)')
         elif status == GoalStatus.STATUS_ABORTED:
             self.get_logger().warn(f'[{_ts()}] ❌ Failed to reach ({x:.2f}, {y:.2f}) — aborted')
             self._failed_goals.append((x, y))
+            self._publish_event('❌ Frontier unreachable — picking another')
         elif status == GoalStatus.STATUS_CANCELED:
             self.get_logger().info(f'[{_ts()}] ⏹ Goal ({x:.2f}, {y:.2f}) canceled — marking as failed')
             self._failed_goals.append((x, y))

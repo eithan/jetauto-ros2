@@ -311,6 +311,9 @@ html, body {
 }
 .toggle-switch.on { background: rgba(0,212,255,0.2); border-color: var(--cyan); box-shadow: 0 0 12px rgba(0,212,255,0.2); }
 .toggle-switch.on::after { transform: translateX(24px); background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+.toggle-switch.mini { width: 40px; height: 22px; }
+.toggle-switch.mini::after { width: 16px; height: 16px; }
+.toggle-switch.mini.on::after { transform: translateX(18px); }
 
 .control-sep { width: 1px; height: 28px; background: var(--border); }
 
@@ -574,10 +577,20 @@ html, body {
           <div class="stat-value" id="gpuTempValue">N/A</div>
         </div>
 
-        <div class="detection-log">
+        <div class="detection-log" id="detectionPanel">
           <div class="stat-label"><span class="status-dot" id="detDot"></span>👁 Detection Log</div>
           <ul class="detection-list" id="detectionList">
             <li class="detection-empty">No detections yet</li>
+          </ul>
+        </div>
+
+        <div class="detection-log" id="explorePanel" style="display:none;">
+          <div class="stat-label" style="display:flex; justify-content:space-between; align-items:center;">
+            <span><span class="status-dot connected" id="exploreDot"></span>🗺 Explore Log</span>
+            <span class="explore-event-count" id="exploreEventCount" style="font-size:11px; color:var(--text-dim); letter-spacing:0;">0 events</span>
+          </div>
+          <ul class="detection-list" id="exploreEventList" style="overflow-y:auto; max-height:130px;">
+            <li class="detection-empty">Waiting for events...</li>
           </ul>
         </div>
       </div>
@@ -617,6 +630,11 @@ html, body {
       <span>🗺</span> Explore
     </button>
 
+    <div class="toggle-group" id="announceGroup" style="display:none;">
+      <span class="toggle-label" style="font-size:12px;">🔊</span>
+      <div class="toggle-switch mini" id="announceToggle" onclick="toggleExploreAnnounce()"></div>
+    </div>
+
     <div class="control-sep"></div>
 
     <button class="shutdown-btn" id="shutdownBtn" onclick="handleShutdown()">
@@ -646,8 +664,10 @@ html, body {
 let voiceEnabled  = false;
 let visionEnabled = false;
 let exploreRunning = false;
+let exploreAnnounce = false;
 let shutdownPending = false;
 let shutdownTimer = null;
+let exploreEvents = [];
 
 // ── Startup overlay ───────────────────────────────────
 let _startupMode = null;
@@ -697,6 +717,17 @@ socket.on('disconnect', () => {
   document.getElementById('connLabel').textContent = 'disconnected';
 });
 
+socket.on('explore_event', (ev) => {
+  exploreEvents.push(ev);
+  if (exploreEvents.length > 20) exploreEvents = exploreEvents.slice(-20);
+  renderExploreEvents();
+});
+
+socket.on('explore_events_history', (events) => {
+  exploreEvents = events || [];
+  renderExploreEvents();
+});
+
 socket.on('config', (cfg) => {
   if (cfg.robot_name) {
     document.getElementById('robotName').textContent = cfg.robot_name;
@@ -716,6 +747,11 @@ socket.on('state', (s) => {
   if (s.explore_running !== undefined) {
     exploreRunning = s.explore_running;
     syncExploreBtn();
+    syncExplorePanels();
+  }
+  if (s.explore_announce !== undefined) {
+    exploreAnnounce = s.explore_announce;
+    syncAnnounceToggle();
   }
   syncToggles();
   // Voice overlay: close when voice pipeline signals it's ready
@@ -855,8 +891,60 @@ function syncExploreBtn() {
 
 function handleExplore() {
   exploreRunning = !exploreRunning;
+  if (exploreRunning) exploreEvents = [];
   syncExploreBtn();
+  syncExplorePanels();
   socket.emit('toggle_explore', { enabled: exploreRunning });
+}
+
+function toggleExploreAnnounce() {
+  exploreAnnounce = !exploreAnnounce;
+  syncAnnounceToggle();
+  socket.emit('toggle_explore_announce', { enabled: exploreAnnounce });
+}
+
+function syncAnnounceToggle() {
+  const toggle = document.getElementById('announceToggle');
+  const group = document.getElementById('announceGroup');
+  toggle.className = 'toggle-switch mini' + (exploreAnnounce ? ' on' : '');
+  group.className = 'toggle-group' + (exploreAnnounce ? ' active' : '');
+}
+
+function syncExplorePanels() {
+  const detPanel = document.getElementById('detectionPanel');
+  const expPanel = document.getElementById('explorePanel');
+  const annGroup = document.getElementById('announceGroup');
+  if (exploreRunning) {
+    detPanel.style.display = 'none';
+    expPanel.style.display = '';
+    annGroup.style.display = '';
+  } else {
+    detPanel.style.display = '';
+    expPanel.style.display = 'none';
+    annGroup.style.display = 'none';
+  }
+}
+
+function renderExploreEvents() {
+  const list = document.getElementById('exploreEventList');
+  const count = document.getElementById('exploreEventCount');
+  if (!exploreEvents.length) {
+    list.innerHTML = '<li class="detection-empty">Waiting for events...</li>';
+    count.textContent = '0 events';
+    return;
+  }
+  count.textContent = exploreEvents.length + ' event' + (exploreEvents.length !== 1 ? 's' : '');
+  list.innerHTML = exploreEvents.slice().reverse().map(ev => {
+    const isError = ev.text.includes('🛑') || ev.text.includes('❌');
+    const isSuccess = ev.text.includes('✅') || ev.text.includes('🎉');
+    const color = isError ? 'var(--red)' : isSuccess ? 'var(--green)' : 'var(--text)';
+    return `<li class="detection-item" style="animation:fade-in 0.3s;">
+      <span class="det-label" style="color:${color}; flex:1;">${ev.text}</span>
+      <span class="det-time">${ev.time}</span>
+    </li>`;
+  }).join('');
+  // Auto-scroll to latest (top since reversed)
+  list.scrollTop = 0;
 }
 
 function handleShutdown() {
