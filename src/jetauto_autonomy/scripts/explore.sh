@@ -24,6 +24,7 @@ cleanup() {
     # Kill our specific nodes
     pkill -f frontier_explorer 2>/dev/null
     pkill -f safety_monitor 2>/dev/null
+    pkill -f obstacle_injector 2>/dev/null
     
     # Kill Nav2 — must kill all spawned processes
     pkill -f navigation_launch 2>/dev/null
@@ -93,16 +94,24 @@ sleep 5
 echo -e "${GREEN}  ✓ Nav2 running (PID $NAV2_PID)${NC}"
 
 # 3. Safety monitor
-echo -e "${GREEN}[3/4] Starting safety monitor...${NC}"
+echo -e "${GREEN}[3/5] Starting safety monitor...${NC}"
 ros2 run jetauto_autonomy safety_monitor --ros-args --log-level info \
   > "$LOG_DIR/safety.log" 2>&1 &
 SAFETY_PID=$!
 sleep 1
 echo -e "${GREEN}  ✓ Safety monitor running (PID $SAFETY_PID)${NC}"
 
-# 4. Frontier explorer (foreground — visible output)
+# 4. Obstacle injector (learns from stuck events → injects into costmap)
+echo -e "${GREEN}[4/5] Starting obstacle injector...${NC}"
+ros2 run jetauto_autonomy obstacle_injector --ros-args --log-level info \
+  > "$LOG_DIR/injector.log" 2>&1 &
+INJECTOR_PID=$!
+sleep 1
+echo -e "${GREEN}  ✓ Obstacle injector running (PID $INJECTOR_PID)${NC}"
+
+# 5. Frontier explorer (foreground — visible output)
 echo ""
-echo -e "${GREEN}[4/4] Starting frontier explorer...${NC}"
+echo -e "${GREEN}[5/5] Starting frontier explorer...${NC}"
 echo -e "${YELLOW}═══════════════════════════════════════${NC}"
 echo -e "${YELLOW}  Robot is now exploring autonomously   ${NC}"
 echo -e "${YELLOW}  Ctrl+C to stop everything             ${NC}"

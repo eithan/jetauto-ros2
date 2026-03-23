@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'frontier_explorer = jetauto_autonomy.frontier_explorer:main',
             'safety_monitor = jetauto_autonomy.safety_monitor:main',
+            'obstacle_injector = jetauto_autonomy.obstacle_injector:main',
         ],
     },
 )

@@ -75,11 +75,19 @@ class FrontierExplorer(Node):
         self.goal_timeout = self.get_parameter('goal_timeout').value
         self.replan_interval = self.get_parameter('replan_interval').value
 
-        # Stuck location blacklist radius (larger than failed goal radius)
-        self.declare_parameter('stuck_blacklist_radius', 1.0)  # 1m around stuck spots
-        self.declare_parameter('stuck_location_ttl', 120.0)  # expire after 2 minutes
+        # Stuck location blacklist — escalating radius for repeat offenders
+        self.declare_parameter('stuck_blacklist_radius', 1.0)  # base radius (1st stuck)
+        self.declare_parameter('stuck_location_ttl', 120.0)  # TTL for 1st stuck (2 min)
+        self.declare_parameter('stuck_escalation_radius', 0.5)  # extra radius per repeat
+        self.declare_parameter('stuck_escalation_ttl', 180.0)  # extra TTL per repeat
+        self.declare_parameter('stuck_max_radius', 3.0)  # cap the exclusion zone
+        self.declare_parameter('stuck_merge_radius', 1.5)  # merge nearby stuck events
         self.stuck_blacklist_radius = self.get_parameter('stuck_blacklist_radius').value
         self.stuck_location_ttl = self.get_parameter('stuck_location_ttl').value
+        self.stuck_escalation_radius = self.get_parameter('stuck_escalation_radius').value
+        self.stuck_escalation_ttl = self.get_parameter('stuck_escalation_ttl').value
+        self.stuck_max_radius = self.get_parameter('stuck_max_radius').value
+        self.stuck_merge_radius = self.get_parameter('stuck_merge_radius').value
 
         # State
         self._map: Optional[OccupancyGrid] = None
@@ -87,10 +95,15 @@ class FrontierExplorer(Node):
         self._start_time = None
         self._current_goal_handle = None
         self._failed_goals: List[Tuple[float, float]] = []
-        # Stuck locations with timestamps: (x, y, time)
-        self._stuck_locations: List[Tuple[float, float, float]] = []
+        # Stuck locations with escalation: (x, y, first_time, count)
+        # count tracks how many times stuck was detected near this spot
+        self._stuck_locations: List[Tuple[float, float, float, int]] = []
         self._goals_sent = 0
         self._goals_reached = 0
+        # Last successfully reached position — for retreat-first behavior
+        self._last_good_position: Optional[Tuple[float, float]] = None
+        # Whether we're in "retreat" mode (going back to last good position)
+        self._retreating = False
 
         # TF
         self._tf_buffer = Buffer()
@@ -137,13 +150,53 @@ class FrontierExplorer(Node):
         self._map = msg
 
     def _stuck_callback(self, msg: PointStamped):
-        """Receive stuck locations from safety_monitor — blacklist with larger radius."""
-        loc = (msg.point.x, msg.point.y, time.time())
-        self._stuck_locations.append(loc)
+        """Receive stuck locations from safety_monitor — blacklist with escalating radius.
+
+        If stuck happens near an existing stuck zone, escalate that zone
+        (bigger radius, longer TTL) instead of creating a new one.
+        """
+        sx, sy = msg.point.x, msg.point.y
+        now = time.time()
+
+        # Check if this is near an existing stuck zone → escalate
+        for i, (ex, ey, et, count) in enumerate(self._stuck_locations):
+            dist = math.sqrt((sx - ex) ** 2 + (sy - ey) ** 2)
+            if dist < self.stuck_merge_radius:
+                new_count = count + 1
+                # Update position to midpoint, reset timer, bump count
+                mx = (ex + sx) / 2.0
+                my = (ey + sy) / 2.0
+                self._stuck_locations[i] = (mx, my, now, new_count)
+                radius = self._get_stuck_radius(new_count)
+                ttl = self._get_stuck_ttl(new_count)
+                self.get_logger().warn(
+                    f'[{_ts()}] ⚠️ ESCALATED stuck zone at ({mx:.2f}, {my:.2f}) — '
+                    f'hit #{new_count}, radius={radius:.1f}m, ttl={ttl:.0f}s'
+                )
+                # Trigger retreat to last known good position
+                self._retreating = True
+                return
+
+        # New stuck zone
+        self._stuck_locations.append((sx, sy, now, 1))
         self.get_logger().warn(
-            f'[{_ts()}] ⚠️ Received stuck location ({loc[0]:.2f}, {loc[1]:.2f}) — '
-            f'blacklisting {self.stuck_blacklist_radius}m radius for {self.stuck_location_ttl:.0f}s'
+            f'[{_ts()}] ⚠️ New stuck zone at ({sx:.2f}, {sy:.2f}) — '
+            f'radius={self.stuck_blacklist_radius}m, ttl={self.stuck_location_ttl:.0f}s'
         )
+        # Trigger retreat to last known good position
+        self._retreating = True
+
+    def _get_stuck_radius(self, count: int) -> float:
+        """Escalating radius: bigger zone for repeat offenders."""
+        radius = self.stuck_blacklist_radius + (count - 1) * self.stuck_escalation_radius
+        return min(radius, self.stuck_max_radius)
+
+    def _get_stuck_ttl(self, count: int) -> float:
+        """Escalating TTL: longer memory for repeat offenders.
+        After 3+ stucks at the same spot, it's permanent for the session."""
+        if count >= 3:
+            return float('inf')  # permanent
+        return self.stuck_location_ttl + (count - 1) * self.stuck_escalation_ttl
 
     def _get_robot_position(self) -> Optional[Tuple[float, float]]:
         """Get robot position in map frame."""
@@ -235,18 +288,25 @@ class FrontierExplorer(Node):
 
         return clusters
 
+    def _is_stuck_expired(self, st: float, count: int) -> bool:
+        """Check if a stuck zone has expired based on its escalation level."""
+        ttl = self._get_stuck_ttl(count)
+        if ttl == float('inf'):
+            return False  # permanent
+        return time.time() - st > ttl
+
     def _path_crosses_stuck_zone(
         self, x1: float, y1: float, x2: float, y2: float
     ) -> bool:
         """Check if the straight line from (x1,y1) to (x2,y2) passes within
-        stuck_blacklist_radius of any stuck location.
+        the stuck zone radius of any active stuck location.
 
         Uses point-to-line-segment distance formula.
+        Radius scales with escalation level.
         """
         if not self._stuck_locations:
             return False
 
-        now = time.time()
         dx = x2 - x1
         dy = y2 - y1
         seg_len_sq = dx * dx + dy * dy
@@ -254,16 +314,17 @@ class FrontierExplorer(Node):
         if seg_len_sq < 1e-6:
             return False  # robot and goal at same spot
 
-        for sx, sy, st in self._stuck_locations:
-            if now - st > self.stuck_location_ttl:
-                continue  # expired
+        for sx, sy, st, count in self._stuck_locations:
+            if self._is_stuck_expired(st, count):
+                continue
+            radius = self._get_stuck_radius(count)
             # Project stuck point onto the line segment
             t = max(0.0, min(1.0, ((sx - x1) * dx + (sy - y1) * dy) / seg_len_sq))
             # Closest point on segment
             px = x1 + t * dx
             py = y1 + t * dy
             dist = math.sqrt((sx - px) ** 2 + (sy - py) ** 2)
-            if dist < self.stuck_blacklist_radius:
+            if dist < radius:
                 return True
 
         return False
@@ -287,12 +348,12 @@ class FrontierExplorer(Node):
             if math.sqrt((wx - fx) ** 2 + (wy - fy) ** 2) < 0.5:
                 return -1.0
 
-        # Skip frontiers near active stuck locations (with TTL)
-        now = time.time()
-        for sx, sy, st in self._stuck_locations:
-            if now - st > self.stuck_location_ttl:
-                continue  # expired
-            if math.sqrt((wx - sx) ** 2 + (wy - sy) ** 2) < self.stuck_blacklist_radius:
+        # Skip frontiers near active stuck locations (escalating radius + TTL)
+        for sx, sy, st, count in self._stuck_locations:
+            if self._is_stuck_expired(st, count):
+                continue
+            radius = self._get_stuck_radius(count)
+            if math.sqrt((wx - sx) ** 2 + (wy - sy) ** 2) < radius:
                 return -1.0
 
         # Skip frontiers whose straight-line path passes through stuck zones
@@ -355,6 +416,27 @@ class FrontierExplorer(Node):
             self._start_time = time.time()
             self.get_logger().info('Starting frontier exploration!')
 
+        # ── Retreat-first: after stuck recovery, go back to last good position ──
+        if self._retreating and self._last_good_position is not None:
+            rx, ry = self._last_good_position
+            robot_pos = self._get_robot_position()
+            if robot_pos is not None:
+                dist_to_safe = math.sqrt(
+                    (rx - robot_pos[0]) ** 2 + (ry - robot_pos[1]) ** 2
+                )
+                if dist_to_safe > 0.3:  # only retreat if we're far enough away
+                    self.get_logger().info(
+                        f'[{_ts()}] 🔙 Retreating to last safe position '
+                        f'({rx:.2f}, {ry:.2f}) — {dist_to_safe:.1f}m away'
+                    )
+                    self._send_goal(rx, ry, is_retreat=True)
+                    return
+                else:
+                    self.get_logger().info(
+                        f'[{_ts()}] Already near safe position — skipping retreat'
+                    )
+            self._retreating = False
+
         # Get robot position
         robot_pos = self._get_robot_position()
         if robot_pos is None:
@@ -395,13 +477,31 @@ class FrontierExplorer(Node):
         scored.sort(key=lambda x: x[0], reverse=True)
 
         if not scored:
+            # First, prune expired stuck zones
+            active_stuck = [
+                (sx, sy, st, c) for sx, sy, st, c in self._stuck_locations
+                if not self._is_stuck_expired(st, c)
+            ]
+            pruned = len(self._stuck_locations) - len(active_stuck)
+            self._stuck_locations = active_stuck
+
             self.get_logger().warn(
                 f'All frontiers scored negative (blocked/failed). '
-                f'Clearing {len(self._failed_goals)} failed goals + '
-                f'{len(self._stuck_locations)} stuck locations and retrying...'
+                f'Clearing {len(self._failed_goals)} failed goals'
+                f'{f", pruned {pruned} expired stuck zones" if pruned else ""}'
+                f'{f", {len(self._stuck_locations)} permanent stuck zones remain" if self._stuck_locations else ""}'
+                f' and retrying...'
             )
             self._failed_goals.clear()
-            self._stuck_locations.clear()
+
+            # If all stuck zones are permanent (count >= 3) and blocking everything,
+            # don't clear them — the obstacles are real. Just clear failed goals.
+            if not self._stuck_locations:
+                return  # all cleared, retry will work
+
+            # If stuck zones remain but all frontiers are still blocked,
+            # the robot may need to explore in a completely different direction.
+            # Don't clear permanent stuck zones — they represent real obstacles.
             return
 
         # Navigate to best frontier centroid
@@ -418,7 +518,7 @@ class FrontierExplorer(Node):
 
         self._send_goal(wx, wy)
 
-    def _send_goal(self, x: float, y: float):
+    def _send_goal(self, x: float, y: float, is_retreat: bool = False):
         """Send a navigation goal to Nav2."""
         goal = NavigateToPose.Goal()
         goal.pose = PoseStamped()
@@ -428,37 +528,58 @@ class FrontierExplorer(Node):
         goal.pose.pose.position.y = y
         goal.pose.pose.orientation.w = 1.0  # face forward
 
-        self._goals_sent += 1
+        if not is_retreat:
+            self._goals_sent += 1
         future = self._nav_client.send_goal_async(
             goal, feedback_callback=self._nav_feedback
         )
         future.add_done_callback(
-            lambda f: self._goal_response(f, x, y)
+            lambda f: self._goal_response(f, x, y, is_retreat)
         )
 
-    def _goal_response(self, future, x: float, y: float):
+    def _goal_response(self, future, x: float, y: float, is_retreat: bool = False):
         """Handle Nav2 goal acceptance/rejection."""
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().warn(f'Goal ({x:.2f}, {y:.2f}) rejected by Nav2')
-            self._failed_goals.append((x, y))
+            if is_retreat:
+                self._retreating = False  # give up on retreat, continue exploring
+            else:
+                self._failed_goals.append((x, y))
             self._current_goal_handle = None
             return
 
         self._current_goal_handle = goal_handle
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(
-            lambda f: self._goal_result(f, x, y)
+            lambda f: self._goal_result(f, x, y, is_retreat)
         )
 
-    def _goal_result(self, future, x: float, y: float):
+    def _goal_result(self, future, x: float, y: float, is_retreat: bool = False):
         """Handle Nav2 goal completion."""
         result = future.result()
         status = result.status
 
+        if is_retreat:
+            # Retreat goal completed — regardless of outcome, resume exploring
+            self._retreating = False
+            if status == GoalStatus.STATUS_SUCCEEDED:
+                self.get_logger().info(
+                    f'[{_ts()}] ✅ Retreated to safe position ({x:.2f}, {y:.2f})'
+                )
+            else:
+                self.get_logger().warn(
+                    f'[{_ts()}] Retreat to ({x:.2f}, {y:.2f}) ended with status '
+                    f'{status} — resuming exploration anyway'
+                )
+            self._current_goal_handle = None
+            return
+
         if status == GoalStatus.STATUS_SUCCEEDED:
             self.get_logger().info(f'[{_ts()}] ✅ Reached frontier ({x:.2f}, {y:.2f})')
             self._goals_reached += 1
+            # Record this as a safe position for future retreats
+            self._last_good_position = (x, y)
         elif status == GoalStatus.STATUS_ABORTED:
             self.get_logger().warn(f'[{_ts()}] ❌ Failed to reach ({x:.2f}, {y:.2f}) — aborted')
             self._failed_goals.append((x, y))

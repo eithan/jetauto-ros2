@@ -180,8 +180,8 @@ global_costmap:
       rolling_window: true
       width: 20
       height: 20
-      plugins: ['scan_obstacle_layer', 'depth_obstacle_layer', 'inflation_layer']
-      # Separate layers: lidar clearing can't erase depth camera obstacles
+      plugins: ['scan_obstacle_layer', 'depth_obstacle_layer', 'virtual_obstacle_layer', 'inflation_layer']
+      # Separate layers: lidar clearing can't erase depth camera or virtual obstacles
       scan_obstacle_layer:
         plugin: nav2_costmap_2d::ObstacleLayer
         enabled: true
@@ -212,6 +212,24 @@ global_costmap:
           clearing: false             # depth obstacles PERSIST — lidar can't erase them
           marking: true
           sensor_frame: depth_cam_link
+      # Virtual obstacles injected when stuck is detected — teaches Nav2 about
+      # invisible obstacles (beds, low tables) that neither lidar nor camera caught
+      virtual_obstacle_layer:
+        plugin: nav2_costmap_2d::ObstacleLayer
+        enabled: true
+        observation_sources: virtual
+        virtual:
+          topic: /virtual_obstacles
+          data_type: PointCloud2
+          max_obstacle_height: 1.0
+          min_obstacle_height: 0.01
+          obstacle_max_range: 25.0    # large range — these are in map frame
+          obstacle_min_range: 0.0
+          raytrace_max_range: 0.0     # no raytracing — don't clear anything
+          raytrace_min_range: 0.0
+          clearing: false             # NEVER clear — these are learned obstacles
+          marking: true
+          sensor_frame: map           # points are already in map frame
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
         cost_scaling_factor: 3.0
@@ -231,7 +249,7 @@ local_costmap:
       width: 3                        # 3m x 3m local window
       height: 3
       resolution: 0.05
-      plugins: ['scan_obstacle_layer', 'depth_obstacle_layer', 'inflation_layer']
+      plugins: ['scan_obstacle_layer', 'depth_obstacle_layer', 'virtual_obstacle_layer', 'inflation_layer']
       scan_obstacle_layer:
         plugin: nav2_costmap_2d::ObstacleLayer
         enabled: true
@@ -262,6 +280,23 @@ local_costmap:
           clearing: false             # depth obstacles persist
           marking: true
           sensor_frame: depth_cam_link
+      # Same virtual obstacle layer in local costmap — DWB needs to see these too
+      virtual_obstacle_layer:
+        plugin: nav2_costmap_2d::ObstacleLayer
+        enabled: true
+        observation_sources: virtual
+        virtual:
+          topic: /virtual_obstacles
+          data_type: PointCloud2
+          max_obstacle_height: 1.0
+          min_obstacle_height: 0.01
+          obstacle_max_range: 25.0
+          obstacle_min_range: 0.0
+          raytrace_max_range: 0.0
+          raytrace_min_range: 0.0
+          clearing: false
+          marking: true
+          sensor_frame: map
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
         cost_scaling_factor: 3.0
