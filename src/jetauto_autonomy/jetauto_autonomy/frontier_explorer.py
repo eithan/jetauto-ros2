@@ -627,13 +627,22 @@ def main(args=None):
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
     finally:
-        node.get_logger().info(
-            f'[{_ts()}] Explorer stopped. Goals: {node._goals_sent} sent, '
-            f'{node._goals_reached} reached'
-        )
-        node.destroy_node()
+        sent = node._goals_sent
+        reached = node._goals_reached
         try:
-            rclpy.shutdown()
+            node.get_logger().info(
+                f'[{_ts()}] Explorer stopped. Goals: {sent} sent, {reached} reached'
+            )
+        except Exception:
+            print(f'[{_ts()}] Explorer stopped. Goals: {sent} sent, {reached} reached')
+
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
         except Exception:
             pass
 

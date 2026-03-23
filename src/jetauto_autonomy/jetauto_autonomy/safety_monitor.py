@@ -423,12 +423,30 @@ def main(args=None):
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
     finally:
-        node.get_logger().info(
-            f'[{_ts()}] Safety monitor stopped. Total e-stops: {node._estop_count}'
-        )
-        node.destroy_node()
+        # Send a final zero-velocity command before shutting down
         try:
-            rclpy.shutdown()
+            stop = Twist()
+            node._cmd_pub.publish(stop)
+        except Exception:
+            pass
+
+        # Log summary before destroying the node (avoids "publisher's context
+        # is invalid" error that occurs when logging after destroy_node)
+        estop_count = node._estop_count
+        try:
+            node.get_logger().info(
+                f'[{_ts()}] Safety monitor stopped. Total e-stops: {estop_count}'
+            )
+        except Exception:
+            print(f'[{_ts()}] Safety monitor stopped. Total e-stops: {estop_count}')
+
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
         except Exception:
             pass
 
