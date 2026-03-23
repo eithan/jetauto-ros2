@@ -77,7 +77,9 @@ class FrontierExplorer(Node):
 
         # Stuck location blacklist radius (larger than failed goal radius)
         self.declare_parameter('stuck_blacklist_radius', 1.0)  # 1m around stuck spots
+        self.declare_parameter('stuck_location_ttl', 120.0)  # expire after 2 minutes
         self.stuck_blacklist_radius = self.get_parameter('stuck_blacklist_radius').value
+        self.stuck_location_ttl = self.get_parameter('stuck_location_ttl').value
 
         # State
         self._map: Optional[OccupancyGrid] = None
@@ -85,7 +87,8 @@ class FrontierExplorer(Node):
         self._start_time = None
         self._current_goal_handle = None
         self._failed_goals: List[Tuple[float, float]] = []
-        self._stuck_locations: List[Tuple[float, float]] = []  # from safety_monitor
+        # Stuck locations with timestamps: (x, y, time)
+        self._stuck_locations: List[Tuple[float, float, float]] = []
         self._goals_sent = 0
         self._goals_reached = 0
 
@@ -135,11 +138,11 @@ class FrontierExplorer(Node):
 
     def _stuck_callback(self, msg: PointStamped):
         """Receive stuck locations from safety_monitor — blacklist with larger radius."""
-        loc = (msg.point.x, msg.point.y)
+        loc = (msg.point.x, msg.point.y, time.time())
         self._stuck_locations.append(loc)
         self.get_logger().warn(
             f'[{_ts()}] ⚠️ Received stuck location ({loc[0]:.2f}, {loc[1]:.2f}) — '
-            f'blacklisting {self.stuck_blacklist_radius}m radius'
+            f'blacklisting {self.stuck_blacklist_radius}m radius for {self.stuck_location_ttl:.0f}s'
         )
 
     def _get_robot_position(self) -> Optional[Tuple[float, float]]:
@@ -243,6 +246,7 @@ class FrontierExplorer(Node):
         if not self._stuck_locations:
             return False
 
+        now = time.time()
         dx = x2 - x1
         dy = y2 - y1
         seg_len_sq = dx * dx + dy * dy
@@ -250,7 +254,9 @@ class FrontierExplorer(Node):
         if seg_len_sq < 1e-6:
             return False  # robot and goal at same spot
 
-        for sx, sy in self._stuck_locations:
+        for sx, sy, st in self._stuck_locations:
+            if now - st > self.stuck_location_ttl:
+                continue  # expired
             # Project stuck point onto the line segment
             t = max(0.0, min(1.0, ((sx - x1) * dx + (sy - y1) * dy) / seg_len_sq))
             # Closest point on segment
@@ -281,8 +287,11 @@ class FrontierExplorer(Node):
             if math.sqrt((wx - fx) ** 2 + (wy - fy) ** 2) < 0.5:
                 return -1.0
 
-        # Skip frontiers near stuck locations (larger radius — these are physical obstacles)
-        for sx, sy in self._stuck_locations:
+        # Skip frontiers near active stuck locations (with TTL)
+        now = time.time()
+        for sx, sy, st in self._stuck_locations:
+            if now - st > self.stuck_location_ttl:
+                continue  # expired
             if math.sqrt((wx - sx) ** 2 + (wy - sy) ** 2) < self.stuck_blacklist_radius:
                 return -1.0
 
@@ -387,10 +396,12 @@ class FrontierExplorer(Node):
 
         if not scored:
             self.get_logger().warn(
-                'All frontiers scored negative (blocked/failed). '
-                'Clearing failed goals and retrying...'
+                f'All frontiers scored negative (blocked/failed). '
+                f'Clearing {len(self._failed_goals)} failed goals + '
+                f'{len(self._stuck_locations)} stuck locations and retrying...'
             )
             self._failed_goals.clear()
+            self._stuck_locations.clear()
             return
 
         # Navigate to best frontier centroid

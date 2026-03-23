@@ -84,6 +84,7 @@ class SafetyMonitor(Node):
         # Stuck detection state (uses SLAM position, not odometry)
         self._last_cmd_vel: Optional[Twist] = None
         self._last_slam_position: Optional[Tuple[float, float]] = None
+        self._last_slam_yaw: Optional[float] = None
         self._last_move_time: float = time.time()
         self._stuck_estop_active = False
         self._stuck_estop_start: float = 0.0
@@ -137,28 +138,53 @@ class SafetyMonitor(Node):
     def _cmd_vel_callback(self, msg: Twist):
         self._last_cmd_vel = msg
 
-    def _get_slam_position(self) -> Optional[Tuple[float, float]]:
-        """Get robot position from SLAM (map frame) — immune to wheel slip."""
+    def _get_slam_pose(self) -> Optional[Tuple[float, float, float]]:
+        """Get robot position + yaw from SLAM (map frame) — immune to wheel slip."""
         try:
             t = self._tf_buffer.lookup_transform(
                 'map', 'base_footprint', rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=0.1),
             )
-            return (t.transform.translation.x, t.transform.translation.y)
+            x = t.transform.translation.x
+            y = t.transform.translation.y
+            # Extract yaw from quaternion
+            q = t.transform.rotation
+            siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+            cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
+            return (x, y, yaw)
         except Exception:
             return None
 
     def _check_stuck(self):
-        """Check if robot is stuck using SLAM position (not odometry)."""
-        pos = self._get_slam_position()
-        if pos is None:
+        """Check if robot is stuck using SLAM position + yaw (not odometry).
+
+        Rotation-in-place counts as movement — the robot is not stuck if it's
+        actively turning (e.g., Nav2 orienting at goal).
+        """
+        pose = self._get_slam_pose()
+        if pose is None:
             return
 
+        x, y, yaw = pose
+
         if self._last_slam_position is not None:
-            dx = pos[0] - self._last_slam_position[0]
-            dy = pos[1] - self._last_slam_position[1]
+            dx = x - self._last_slam_position[0]
+            dy = y - self._last_slam_position[1]
             dist = math.sqrt(dx * dx + dy * dy)
-            if dist > self.stuck_move_threshold:
+
+            # Check yaw change (handle wraparound)
+            yaw_change = 0.0
+            if self._last_slam_yaw is not None:
+                yaw_change = abs(yaw - self._last_slam_yaw)
+                if yaw_change > math.pi:
+                    yaw_change = 2.0 * math.pi - yaw_change
+
+            # Robot is "moving" if translating OR rotating significantly
+            # 0.05 rad ≈ 3° — enough to detect intentional rotation
+            is_moving = dist > self.stuck_move_threshold or yaw_change > 0.05
+
+            if is_moving:
                 self._last_move_time = time.time()
                 # Clear stuck if hold time has elapsed
                 if self._stuck_estop_active and self._recovery_state == self.RECOVERY_NONE:
@@ -169,18 +195,19 @@ class SafetyMonitor(Node):
                         )
                         self._stuck_estop_active = False
 
-        self._last_slam_position = pos
+        self._last_slam_position = (x, y)
+        self._last_slam_yaw = yaw
 
     def _publish_stuck_location(self):
         """Publish the current position as a stuck location for other nodes."""
-        pos = self._get_slam_position()
-        if pos is None:
+        pose = self._get_slam_pose()
+        if pose is None:
             return
         msg = PointStamped()
         msg.header.frame_id = 'map'
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.point.x = pos[0]
-        msg.point.y = pos[1]
+        msg.point.x = pose[0]
+        msg.point.y = pose[1]
         msg.point.z = 0.0
         self._stuck_pub.publish(msg)
 
