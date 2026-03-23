@@ -14,6 +14,8 @@ import subprocess
 import threading
 from datetime import datetime
 
+import json
+
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
@@ -25,6 +27,13 @@ try:
     HAS_DETECTION_MSGS = True
 except ImportError:
     HAS_DETECTION_MSGS = False
+
+# Optional: face recognition messages
+try:
+    from jetauto_msgs.msg import RecognizedFaceArray
+    HAS_FACE_MSGS = True
+except ImportError:
+    HAS_FACE_MSGS = False
 
 from flask import Flask, send_from_directory
 from flask_socketio import SocketIO
@@ -48,11 +57,13 @@ class DashboardNode(Node):
         # -- Managed subprocess handles --
         # Each node group is managed independently to avoid lifecycle
         # collisions when voice and vision are toggled separately.
-        self._voice_proc = None     # voice_commander_node only
-        self._detector_proc = None  # detector_node only
-        self._tts_proc = None       # tts_node only (shared by voice & vision)
-        self._caption_proc = None   # caption_node (Florence-2, vision only)
-        self._explore_proc = None   # autonomous exploration (explore.sh)
+        self._voice_proc = None       # voice_commander_node only
+        self._detector_proc = None    # detector_node only
+        self._tts_proc = None         # tts_node only (shared by voice & vision)
+        self._caption_proc = None     # caption_node (Florence-2, vision only)
+        self._explore_proc = None     # autonomous exploration (explore.sh)
+        self._face_proc = None        # face_recognition_node
+        self._enrollment_proc = None  # face enrollment_node
 
         # -- State --
         self.state = {
@@ -67,6 +78,9 @@ class DashboardNode(Node):
             'uptime': 0,
             'explore_running': False,
             'explore_announce': False,  # TTS announcements for explore events
+            'face_enabled': False,
+            'enrollment_active': False,
+            'enrollment_status': None,  # latest JSON payload from enrollment_node
         }
         self._explore_events = []  # last N explore events for the UI
 
@@ -122,6 +136,16 @@ class DashboardNode(Node):
                 DetectedObjectArray, '/detected_objects',
                 self._on_detections, qos_best_effort)
 
+        # Face enrollment status
+        self.create_subscription(
+            String, '/faces/enroll/status', self._on_enrollment_status, qos_reliable)
+
+        # Recognized faces (optional — for detection log overlay)
+        if HAS_FACE_MSGS:
+            self.create_subscription(
+                RecognizedFaceArray, '/recognized_faces',
+                self._on_recognized_faces, qos_best_effort)
+
         # -- Publishers --
         self.pub_voice_enable = self.create_publisher(Bool, '/jetauto/voice/enable', 1)
         self.pub_vision_enable = self.create_publisher(Bool, '/jetauto/detection/enable', 1)
@@ -129,6 +153,7 @@ class DashboardNode(Node):
         self.pub_tts = self.create_publisher(String, '/tts/speak', 1)
         self.pub_tts_cancel = self.create_publisher(Bool, '/tts/cancel', 1)
         self.pub_volume = self.create_publisher(Float32, '/tts/set_volume', 1)
+        self.pub_enroll_cmd = self.create_publisher(String, '/faces/enroll/command', 1)
 
         # -- Uptime timer --
         self.create_timer(1.0, self._tick_uptime)
@@ -269,6 +294,71 @@ class DashboardNode(Node):
                 self.pub_tts.publish(tts_msg)
 
         self.get_logger().info(f'Explore event: {msg.data}')
+
+    def _on_enrollment_status(self, msg: String):
+        """Relay enrollment node status to the browser via SocketIO."""
+        try:
+            payload = json.loads(msg.data)
+        except Exception:
+            return
+
+        self.state['enrollment_status'] = payload
+
+        # Track whether enrollment is active
+        state_val = payload.get('state', 'idle')
+        active = state_val in ('loading', 'ready', 'capturing')
+        if self.state['enrollment_active'] != active:
+            self.state['enrollment_active'] = active
+
+        self._emit_state()
+
+        # Also push enrollment status as a dedicated event for the modal
+        try:
+            self.socketio.emit('enrollment_status', payload)
+        except AttributeError:
+            pass
+
+        # If enrollment completed or errored, kill the enrollment process
+        if state_val in ('done', 'error', 'cancelled'):
+            threading.Thread(
+                target=self._deferred_kill_enrollment, daemon=True
+            ).start()
+
+    def _deferred_kill_enrollment(self):
+        """Give the enrollment node a moment to finish speaking, then stop it."""
+        time.sleep(4)
+        self._kill_enrollment()
+        self.state['enrollment_active'] = False
+        self._emit_state()
+
+    def _on_recognized_faces(self, msg):
+        """Overlay recognized face names in the detection log."""
+        if not msg.faces:
+            return
+
+        ts = datetime.now().strftime('%H:%M:%S')
+        # Merge known faces into the detections list (prepend with 👤 label)
+        known = [f for f in msg.faces if f.name != 'unknown']
+        if not known:
+            return
+
+        entries = []
+        seen = set()
+        for f in known:
+            if f.name not in seen:
+                seen.add(f.name)
+                entries.append({
+                    'label': f'👤 {f.name}',
+                    'confidence': round(f.confidence, 2),
+                    'time': ts,
+                })
+
+        new_labels = frozenset(e['label'] for e in entries)
+        old_labels = getattr(self, '_last_face_labels', frozenset())
+        if new_labels != old_labels:
+            self._last_face_labels = new_labels
+            self.state['detections'] = entries[:5]
+            self._emit_state()
 
     def _on_startup(self):
         """Auto-enable voice once on startup."""
@@ -465,13 +555,21 @@ class DashboardNode(Node):
         self._tts_proc = None
 
     def _maybe_kill_tts(self):
-        """Kill tts_node only if neither voice nor vision needs it."""
-        if not self.state.get('voice_enabled') and not self.state.get('vision_enabled'):
+        """Kill tts_node only if nothing needs it."""
+        if (
+            not self.state.get('voice_enabled')
+            and not self.state.get('vision_enabled')
+            and not self.state.get('face_enabled')
+        ):
             self._kill_tts()
 
     def _maybe_kill_detector(self):
-        """Kill detector_node only if neither voice nor vision needs it."""
-        if not self.state.get('voice_enabled') and not self.state.get('vision_enabled'):
+        """Kill detector_node only if nothing needs it."""
+        if (
+            not self.state.get('voice_enabled')
+            and not self.state.get('vision_enabled')
+            and not self.state.get('face_enabled')
+        ):
             self._kill_detector()
 
     # -- Caption (Florence-2, vision only) --
@@ -492,6 +590,44 @@ class DashboardNode(Node):
     def _kill_caption(self):
         self._kill_proc(self._caption_proc, 'Caption')
         self._caption_proc = None
+
+    # -- Face recognition --
+
+    def _launch_face(self):
+        """Launch face_recognition_node via face_recognition.launch.py."""
+        if self._proc_alive(self._face_proc):
+            return
+        try:
+            self._face_proc = subprocess.Popen(
+                ['ros2', 'launch', 'jetauto_faces', 'face_recognition.launch.py'],
+                preexec_fn=os.setsid,
+            )
+            self.get_logger().info(f'Face recognition launched (pid {self._face_proc.pid})')
+        except Exception as e:
+            self.get_logger().error(f'Failed to launch face recognition: {e}')
+
+    def _kill_face(self):
+        self._kill_proc(self._face_proc, 'Face recognition')
+        self._face_proc = None
+
+    # -- Enrollment node --
+
+    def _launch_enrollment(self):
+        """Launch enrollment_node via enrollment.launch.py."""
+        if self._proc_alive(self._enrollment_proc):
+            return
+        try:
+            self._enrollment_proc = subprocess.Popen(
+                ['ros2', 'launch', 'jetauto_faces', 'enrollment.launch.py'],
+                preexec_fn=os.setsid,
+            )
+            self.get_logger().info(f'Enrollment node launched (pid {self._enrollment_proc.pid})')
+        except Exception as e:
+            self.get_logger().error(f'Failed to launch enrollment node: {e}')
+
+    def _kill_enrollment(self):
+        self._kill_proc(self._enrollment_proc, 'Enrollment')
+        self._enrollment_proc = None
 
     # -- Explore (autonomous exploration) --
 
@@ -532,6 +668,8 @@ class DashboardNode(Node):
         self._kill_detector()
         self._kill_caption()
         self._kill_tts()
+        self._kill_face()
+        self._kill_enrollment()
 
     # ── Command handlers (from browser) ────────────────────────────
 
@@ -618,6 +756,88 @@ class DashboardNode(Node):
         self._emit_state()
         self.get_logger().info(f'Explore announcements {"enabled" if enabled else "disabled"}')
 
+    def toggle_face(self, enabled: bool):
+        """Enable or disable face recognition."""
+        self.state['face_enabled'] = enabled
+        self._emit_state()
+
+        if enabled:
+            self._launch_tts()       # needed for greeting announcements
+            self._launch_detector()  # face node needs YOLO person detections
+            self._launch_face()
+            threading.Thread(target=self._announce_face_enabled, daemon=True).start()
+        else:
+            self._kill_face()
+            self._maybe_kill_detector()
+            self._maybe_kill_tts()
+
+        self.get_logger().info(f'Face recognition {"enabled" if enabled else "disabled"}')
+
+    def _announce_face_enabled(self):
+        """Wait for the face model to load, then announce enrolled names."""
+        time.sleep(15)  # buffalo_l takes ~10-15s on Orin Nano
+        if not self.state.get('face_enabled'):
+            return  # was turned off while loading
+        names = self._read_enrolled_names()
+        if not names:
+            text = 'Face detection enabled. No faces enrolled yet.'
+        elif len(names) == 1:
+            text = f'Face detection enabled. I know {names[0]}.'
+        elif len(names) == 2:
+            text = f'Face detection enabled. I know {names[0]} and {names[1]}.'
+        else:
+            text = (
+                f'Face detection enabled. I know '
+                f'{", ".join(names[:-1])}, and {names[-1]}.'
+            )
+        msg = String()
+        msg.data = text
+        self.pub_tts.publish(msg)
+
+    def _read_enrolled_names(self) -> list:
+        """Read display names from the face database directory."""
+        db_path = '/home/ubuntu/ros2_ws/src/jetauto-ros2/data/faces'
+        names = []
+        if not os.path.isdir(db_path):
+            return names
+        for fname in sorted(os.listdir(db_path)):
+            if fname.endswith('.npz'):
+                # Convert safe_name.npz → display name (e.g. "john_doe" → "John Doe")
+                raw = fname[:-4].replace('_', ' ').title()
+                names.append(raw)
+        return names
+
+    def start_enrollment(self, name: str):
+        """Launch the enrollment node and kick off enrollment for <name>."""
+        if not self._proc_alive(self._enrollment_proc):
+            self._launch_tts()  # TTS needed for voice guidance
+            self._launch_enrollment()
+            # Give the node a moment to subscribe before sending the command
+            def _send_cmd():
+                time.sleep(3)
+                cmd = String()
+                cmd.data = f'start:{name}'
+                self.pub_enroll_cmd.publish(cmd)
+            threading.Thread(target=_send_cmd, daemon=True).start()
+        else:
+            # Node already running — send command directly
+            cmd = String()
+            cmd.data = f'start:{name}'
+            self.pub_enroll_cmd.publish(cmd)
+
+        self.state['enrollment_active'] = True
+        self._emit_state()
+        self.get_logger().info(f'Enrollment started for "{name}"')
+
+    def cancel_enrollment(self):
+        """Send cancel command to enrollment node."""
+        cmd = String()
+        cmd.data = 'cancel'
+        self.pub_enroll_cmd.publish(cmd)
+        self.state['enrollment_active'] = False
+        self._emit_state()
+        self.get_logger().info('Enrollment cancelled from dashboard')
+
     def speak(self, text: str):
         msg = String()
         msg.data = text
@@ -651,10 +871,14 @@ def create_app(node: DashboardNode):
         socketio.emit('state', node.state)
         socketio.emit('config', {
             'robot_name': node.get_parameter('robot_name').value,
+            'enrolled_names': node._read_enrolled_names(),
         })
         # Send explore event history so browser catches up
         if node._explore_events:
             socketio.emit('explore_events_history', node._explore_events)
+        # Replay last enrollment status if active
+        if node.state.get('enrollment_status'):
+            socketio.emit('enrollment_status', node.state['enrollment_status'])
 
     @socketio.on('toggle_voice')
     def on_toggle_voice(data):
@@ -686,6 +910,20 @@ def create_app(node: DashboardNode):
     @socketio.on('speak')
     def on_speak(data):
         node.speak(data.get('text', ''))
+
+    @socketio.on('toggle_face')
+    def on_toggle_face(data):
+        node.toggle_face(data.get('enabled', False))
+
+    @socketio.on('start_enrollment')
+    def on_start_enrollment(data):
+        name = (data.get('name') or '').strip()
+        if name:
+            node.start_enrollment(name)
+
+    @socketio.on('cancel_enrollment')
+    def on_cancel_enrollment():
+        node.cancel_enrollment()
 
     @socketio.on('request_state')
     def on_request_state():

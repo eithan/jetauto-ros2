@@ -430,6 +430,158 @@ html, body {
 .startup-msg { font-size: 14px; letter-spacing: 3px; text-transform: uppercase; color: var(--cyan); text-align: center; }
 .startup-sub { font-size: 12px; color: var(--text-dim); text-align: center; margin-top: -16px; }
 
+/* ── Enrollment Modal ──────────────────────────────────── */
+.enroll-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 14, 24, 0.88);
+  backdrop-filter: blur(8px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: overlay-in 0.25s ease;
+}
+
+.enroll-dialog {
+  background: rgba(28, 44, 68, 0.98);
+  border: 1px solid rgba(92, 224, 255, 0.4);
+  border-radius: 20px;
+  padding: 36px 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  min-width: 360px;
+  max-width: 440px;
+  box-shadow: 0 0 60px rgba(0, 200, 255, 0.12);
+  animation: dialog-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.enroll-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  color: var(--amber);
+  text-transform: uppercase;
+}
+
+.enroll-input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(92, 224, 255, 0.35);
+  border-radius: 10px;
+  padding: 12px 16px;
+  color: var(--text);
+  font-size: 16px;
+  outline: none;
+  letter-spacing: 1px;
+  transition: border-color 0.2s;
+}
+.enroll-input:focus { border-color: var(--cyan); }
+.enroll-input::placeholder { color: var(--text-dim); opacity: 0.6; }
+
+.enroll-start-btn {
+  width: 100%;
+  justify-content: center;
+  background: rgba(250, 204, 21, 0.12);
+  border: 1px solid rgba(250, 204, 21, 0.4);
+  border-radius: 12px;
+  padding: 12px 24px;
+  color: var(--amber);
+  font-size: 15px; font-weight: 600; letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex; align-items: center; gap: 8px;
+}
+.enroll-start-btn:hover { background: rgba(250,204,21,0.22); border-color: var(--amber); }
+.enroll-start-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Face visible indicator */
+.face-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.face-dot {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: background 0.3s, box-shadow 0.3s;
+  flex-shrink: 0;
+}
+.face-dot.visible {
+  background: var(--green);
+  box-shadow: 0 0 10px var(--green);
+  animation: face-pulse 1.2s ease-in-out infinite;
+}
+.face-dot.loading {
+  background: var(--amber);
+  animation: face-pulse 0.8s ease-in-out infinite;
+}
+@keyframes face-pulse {
+  0%, 100% { opacity: 0.7; }
+  50%       { opacity: 1; }
+}
+.face-indicator-label {
+  font-size: 13px;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  transition: color 0.3s;
+}
+.face-indicator-label.visible { color: var(--green); }
+
+/* Progress dots */
+.enroll-dots {
+  display: flex;
+  gap: 10px;
+}
+.enroll-dot {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.2);
+  transition: all 0.4s ease;
+}
+.enroll-dot.filled {
+  background: var(--amber);
+  border-color: var(--amber);
+  box-shadow: 0 0 8px rgba(250,204,21,0.5);
+}
+.enroll-dot.active {
+  background: rgba(250,204,21,0.3);
+  border-color: var(--amber);
+  animation: enroll-dot-pulse 0.8s ease-in-out infinite;
+}
+@keyframes enroll-dot-pulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(250,204,21,0.3); }
+  50%       { box-shadow: 0 0 12px rgba(250,204,21,0.7); }
+}
+
+.enroll-message {
+  font-size: 14px;
+  color: var(--text-dim);
+  text-align: center;
+  min-height: 38px;
+  line-height: 1.5;
+}
+
+/* Face button + Face toggle in controls bar */
+.face-btn {
+  background: rgba(250, 204, 21, 0.1);
+  border: 1px solid rgba(250, 204, 21, 0.3);
+  border-radius: 12px;
+  padding: 10px 24px;
+  color: var(--amber);
+  font-size: 15px; font-weight: 600; letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex; align-items: center; gap: 8px;
+}
+.face-btn:hover { background: rgba(250,204,21,0.2); border-color: var(--amber); box-shadow: 0 0 15px rgba(250,204,21,0.2); }
+
 /* ── Responsive ────────────────────────────────────────── */
 @media (max-width: 900px) {
   .main-area { grid-template-columns: 1fr; }
@@ -637,6 +789,17 @@ html, body {
 
     <div class="control-sep"></div>
 
+    <div class="toggle-group" id="faceGroup">
+      <span class="toggle-label">👤 Face ID</span>
+      <div class="toggle-switch" id="faceToggle" onclick="toggleFaceID()"></div>
+    </div>
+
+    <button class="face-btn" id="enrollBtn" onclick="openEnrollModal()">
+      <span>🧑</span> Enroll
+    </button>
+
+    <div class="control-sep"></div>
+
     <button class="shutdown-btn" id="shutdownBtn" onclick="handleShutdown()">
       <span>⏻</span> Shutdown
     </button>
@@ -645,6 +808,49 @@ html, body {
 
     <button class="close-btn" onclick="closeDashboard()">
       <span>✕</span> Close
+    </button>
+  </div>
+</div>
+
+<!-- Enrollment modal -->
+<div class="enroll-overlay" id="enrollOverlay" style="display:none;">
+  <div class="enroll-dialog">
+    <div class="enroll-title">🧑 Face Enrollment</div>
+
+    <!-- Phase 1: name input -->
+    <div id="enrollNamePhase" style="display:flex; flex-direction:column; align-items:stretch; gap:14px; width:100%;">
+      <input id="enrollNameInput" class="enroll-input" type="text"
+             placeholder="Enter name..."
+             onkeydown="if(event.key==='Enter') submitEnrollName()" />
+      <button class="enroll-start-btn" id="enrollStartBtn" onclick="submitEnrollName()">
+        <span>▶</span> Start Enrollment
+      </button>
+    </div>
+
+    <!-- Phase 2: loading model -->
+    <div id="enrollLoadingPhase" style="display:none; flex-direction:column; align-items:center; gap:14px;">
+      <div class="startup-spinner" style="width:44px; height:44px;"></div>
+      <div style="font-size:12px; letter-spacing:2px; color:var(--text-dim);">LOADING MODEL...</div>
+    </div>
+
+    <!-- Phase 3: capturing -->
+    <div id="enrollCapturePhase" style="display:none; flex-direction:column; align-items:center; gap:16px; width:100%;">
+      <div class="face-indicator">
+        <div class="face-dot" id="faceDot"></div>
+        <span class="face-indicator-label" id="faceDotLabel">Waiting for face...</span>
+      </div>
+      <div class="enroll-dots" id="enrollDots"></div>
+      <div class="enroll-message" id="enrollMessage">Stand in front of the camera.</div>
+    </div>
+
+    <!-- Done message -->
+    <div id="enrollDonePhase" style="display:none; flex-direction:column; align-items:center; gap:10px;">
+      <div style="font-size:32px;">✅</div>
+      <div id="enrollDoneMsg" style="font-size:14px; color:var(--green); text-align:center; letter-spacing:1px;"></div>
+    </div>
+
+    <button onclick="closeEnrollModal()" class="close-btn" style="width:100%; justify-content:center; margin-top:4px;">
+      <span id="enrollCloseLabel">Cancel</span>
     </button>
   </div>
 </div>
@@ -744,6 +950,10 @@ socket.on('state', (s) => {
   updateDetections(s.detections);
   voiceEnabled  = s.voice_enabled;
   visionEnabled = s.vision_enabled;
+  if (s.face_enabled !== undefined) {
+    faceEnabled = s.face_enabled;
+    syncFaceToggle();
+  }
   if (s.explore_running !== undefined) {
     exploreRunning = s.explore_running;
     syncExploreBtn();
@@ -1072,6 +1282,139 @@ function updateRobotFaceState(state) {
       break;
   }
 }
+
+// ── Face ID Toggle ────────────────────────────────────
+
+let faceEnabled = false;
+
+function toggleFaceID() {
+  faceEnabled = !faceEnabled;
+  syncFaceToggle();
+  socket.emit('toggle_face', { enabled: faceEnabled });
+}
+
+function syncFaceToggle() {
+  document.getElementById('faceToggle').className = 'toggle-switch' + (faceEnabled ? ' on' : '');
+  document.getElementById('faceGroup').className  = 'toggle-group'  + (faceEnabled ? ' active' : '');
+}
+
+// ── Enrollment Modal ──────────────────────────────────
+
+let enrollmentActive = false;
+let enrollTotal = 5;
+
+function openEnrollModal() {
+  // Reset to name-input phase
+  _showEnrollPhase('name');
+  document.getElementById('enrollNameInput').value = '';
+  document.getElementById('enrollCloseLabel').textContent = 'Cancel';
+  document.getElementById('enrollOverlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('enrollNameInput').focus(), 100);
+}
+
+function closeEnrollModal() {
+  const overlay = document.getElementById('enrollOverlay');
+  overlay.style.display = 'none';
+  if (enrollmentActive) {
+    socket.emit('cancel_enrollment');
+    enrollmentActive = false;
+  }
+}
+
+function submitEnrollName() {
+  const name = document.getElementById('enrollNameInput').value.trim();
+  if (!name) {
+    document.getElementById('enrollNameInput').style.borderColor = 'var(--red)';
+    setTimeout(() => document.getElementById('enrollNameInput').style.borderColor = '', 1000);
+    return;
+  }
+  enrollmentActive = true;
+  _showEnrollPhase('loading');
+  socket.emit('start_enrollment', { name });
+}
+
+function _showEnrollPhase(phase) {
+  document.getElementById('enrollNamePhase').style.display    = phase === 'name'     ? 'flex' : 'none';
+  document.getElementById('enrollLoadingPhase').style.display = phase === 'loading'  ? 'flex' : 'none';
+  document.getElementById('enrollCapturePhase').style.display = phase === 'capture'  ? 'flex' : 'none';
+  document.getElementById('enrollDonePhase').style.display    = phase === 'done'     ? 'flex' : 'none';
+}
+
+function _buildEnrollDots(total, filled) {
+  const container = document.getElementById('enrollDots');
+  container.innerHTML = '';
+  for (let i = 0; i < total; i++) {
+    const dot = document.createElement('div');
+    if (i < filled)      dot.className = 'enroll-dot filled';
+    else if (i === filled) dot.className = 'enroll-dot active';
+    else                 dot.className = 'enroll-dot';
+    container.appendChild(dot);
+  }
+}
+
+socket.on('enrollment_status', (payload) => {
+  const state = payload.state || 'idle';
+  const total = payload.total || 5;
+  const progress = payload.progress || 0;
+  const faceVisible = payload.face_visible || false;
+  const message = payload.message || '';
+
+  enrollTotal = total;
+  enrollmentActive = (state === 'loading' || state === 'ready' || state === 'capturing');
+
+  // Only update modal if it's open
+  const overlay = document.getElementById('enrollOverlay');
+  if (overlay.style.display === 'none') return;
+
+  if (state === 'loading') {
+    _showEnrollPhase('loading');
+
+  } else if (state === 'ready' || state === 'capturing') {
+    _showEnrollPhase('capture');
+    _buildEnrollDots(total, progress);
+
+    // Face indicator
+    const dot = document.getElementById('faceDot');
+    const label = document.getElementById('faceDotLabel');
+    if (faceVisible) {
+      dot.className = 'face-dot visible';
+      label.className = 'face-indicator-label visible';
+      label.textContent = 'Face detected ✓';
+    } else {
+      dot.className = 'face-dot';
+      label.className = 'face-indicator-label';
+      label.textContent = 'No face detected';
+    }
+
+    if (message) document.getElementById('enrollMessage').textContent = message;
+
+  } else if (state === 'done') {
+    _showEnrollPhase('done');
+    document.getElementById('enrollDoneMsg').textContent =
+      payload.message || `Enrolled "${payload.name}" successfully!`;
+    document.getElementById('enrollCloseLabel').textContent = 'Close';
+    enrollmentActive = false;
+    // Auto-close after 3s
+    setTimeout(() => {
+      if (document.getElementById('enrollOverlay').style.display !== 'none') {
+        closeEnrollModal();
+      }
+    }, 3500);
+
+  } else if (state === 'error') {
+    _showEnrollPhase('capture');
+    document.getElementById('enrollMessage').textContent =
+      '⚠️ ' + (payload.message || 'An error occurred');
+    document.getElementById('enrollCloseLabel').textContent = 'Close';
+    enrollmentActive = false;
+
+  } else if (state === 'cancelled') {
+    overlay.style.display = 'none';
+    enrollmentActive = false;
+  }
+});
+
+// (config handler is already above — no duplicate needed)
 
 // ── Clock ─────────────────────────────────────────────
 function updateClock() {

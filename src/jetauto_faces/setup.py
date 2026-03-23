@@ -25,6 +25,7 @@ setup(
         'console_scripts': [
             'face_recognition_node = jetauto_faces.face_recognition_node:main',
             'enroll_face = jetauto_faces.enroll_face:main',
+            'enrollment_node = jetauto_faces.enrollment_node:main',
         ],
     },
 )
