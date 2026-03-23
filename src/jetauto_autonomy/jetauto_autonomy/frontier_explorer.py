@@ -393,7 +393,8 @@ class FrontierExplorer(Node):
             self.get_logger().warn(f'[{_ts()}] ❌ Failed to reach ({x:.2f}, {y:.2f}) — aborted')
             self._failed_goals.append((x, y))
         elif status == GoalStatus.STATUS_CANCELED:
-            self.get_logger().info(f'⏹ Goal ({x:.2f}, {y:.2f}) canceled')
+            self.get_logger().info(f'[{_ts()}] ⏹ Goal ({x:.2f}, {y:.2f}) canceled — marking as failed')
+            self._failed_goals.append((x, y))
         else:
             self.get_logger().warn(f'Goal ({x:.2f}, {y:.2f}) ended with status {status}')
             self._failed_goals.append((x, y))

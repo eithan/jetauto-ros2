@@ -62,6 +62,7 @@ echo ""
 # Create log directory
 LOG_DIR="$HOME/ros2_ws/logs/explore_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$LOG_DIR"
+ln -sfn "$LOG_DIR" "$HOME/ros2_ws/logs/explore_latest"
 echo -e "Logs: ${LOG_DIR}"
 echo ""
 
