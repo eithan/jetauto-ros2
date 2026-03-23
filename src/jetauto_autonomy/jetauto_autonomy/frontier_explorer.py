@@ -232,6 +232,36 @@ class FrontierExplorer(Node):
 
         return clusters
 
+    def _path_crosses_stuck_zone(
+        self, x1: float, y1: float, x2: float, y2: float
+    ) -> bool:
+        """Check if the straight line from (x1,y1) to (x2,y2) passes within
+        stuck_blacklist_radius of any stuck location.
+
+        Uses point-to-line-segment distance formula.
+        """
+        if not self._stuck_locations:
+            return False
+
+        dx = x2 - x1
+        dy = y2 - y1
+        seg_len_sq = dx * dx + dy * dy
+
+        if seg_len_sq < 1e-6:
+            return False  # robot and goal at same spot
+
+        for sx, sy in self._stuck_locations:
+            # Project stuck point onto the line segment
+            t = max(0.0, min(1.0, ((sx - x1) * dx + (sy - y1) * dy) / seg_len_sq))
+            # Closest point on segment
+            px = x1 + t * dx
+            py = y1 + t * dy
+            dist = math.sqrt((sx - px) ** 2 + (sy - py) ** 2)
+            if dist < self.stuck_blacklist_radius:
+                return True
+
+        return False
+
     def _score_frontier(
         self, cluster: List[Tuple[int, int]], robot_pos: Tuple[float, float]
     ) -> float:
@@ -255,6 +285,11 @@ class FrontierExplorer(Node):
         for sx, sy in self._stuck_locations:
             if math.sqrt((wx - sx) ** 2 + (wy - sy) ** 2) < self.stuck_blacklist_radius:
                 return -1.0
+
+        # Skip frontiers whose straight-line path passes through stuck zones
+        # This prevents Nav2 from routing through invisible obstacles (bed, dog beds)
+        if self._path_crosses_stuck_zone(robot_pos[0], robot_pos[1], wx, wy):
+            return -1.0
 
         # Score: size bonus - distance penalty
         size = len(cluster)

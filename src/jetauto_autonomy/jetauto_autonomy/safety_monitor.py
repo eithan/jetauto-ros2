@@ -56,10 +56,10 @@ class SafetyMonitor(Node):
         self.declare_parameter('stuck_hold_time', 15.0)  # hold for 15 seconds
         self.declare_parameter('startup_grace_period', 10.0)  # ignore stuck for first 10s
         self.declare_parameter('cmd_active_threshold', 3.0)  # commands must be active 3s before stuck counts
-        self.declare_parameter('recovery_backup_speed', -0.15)  # m/s backward
-        self.declare_parameter('recovery_strafe_speed', 0.20)  # m/s sideways
-        self.declare_parameter('recovery_backup_duration', 1.5)  # seconds
-        self.declare_parameter('recovery_strafe_duration', 1.0)  # seconds
+        self.declare_parameter('recovery_backup_speed', -0.20)  # m/s backward
+        self.declare_parameter('recovery_strafe_speed', 0.25)  # m/s sideways
+        self.declare_parameter('recovery_backup_duration', 2.0)  # seconds (~40cm backup)
+        self.declare_parameter('recovery_strafe_duration', 1.5)  # seconds (~37cm strafe)
 
         self.min_dist = self.get_parameter('min_obstacle_distance').value
         self.warn_dist = self.get_parameter('warn_obstacle_distance').value
@@ -226,6 +226,10 @@ class SafetyMonitor(Node):
             if elapsed >= 3.0:
                 self._recovery_state = self.RECOVERY_NONE
                 self._stuck_estop_active = False
+                # CRITICAL: reset command tracking so stuck detection
+                # doesn't immediately re-trigger with stale cumulative time
+                self._cmd_active_since = None
+                self._last_move_time = time.time()
                 self.get_logger().info(
                     f'[{_ts()}] 🟢 Recovery hold complete — resuming exploration'
                 )
@@ -235,6 +239,8 @@ class SafetyMonitor(Node):
         self._recovery_count += 1
         self._recovery_state = self.RECOVERY_BACKUP
         self._recovery_start = time.time()
+        # Reset command tracking — recovery is its own thing
+        self._cmd_active_since = None
         # Alternate strafe direction each time
         self._recovery_direction = 1 if self._recovery_count % 2 == 1 else -1
         self.get_logger().info(
