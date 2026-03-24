@@ -233,7 +233,7 @@ global_costmap:
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
         cost_scaling_factor: 3.0
-        inflation_radius: 0.50
+        inflation_radius: 0.35        # was 0.50 — reduced to give DWB more valid trajectories
 
 # ─── Local Costmap ───
 local_costmap:
@@ -300,7 +300,7 @@ local_costmap:
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
         cost_scaling_factor: 3.0
-        inflation_radius: 0.50
+        inflation_radius: 0.35        # was 0.50 — reduced to give DWB more valid trajectories
 
 # ─── Velocity Smoother ───
 velocity_smoother:
