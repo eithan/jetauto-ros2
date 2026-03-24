@@ -51,7 +51,7 @@ class SafetyMonitor(Node):
         self.declare_parameter('warn_obstacle_distance', 0.35)  # 35cm
         self.declare_parameter('check_frequency', 20.0)  # 20Hz
         self.declare_parameter('resume_distance', 0.40)  # must back off to 40cm
-        self.declare_parameter('stuck_timeout', 5.0)  # seconds without progress = stuck
+        self.declare_parameter('stuck_timeout', 3.0)  # seconds without progress = stuck
         self.declare_parameter('stuck_move_threshold', 0.02)  # 2cm minimum movement
         self.declare_parameter('stuck_hold_time', 15.0)  # hold for 15 seconds
         self.declare_parameter('startup_grace_period', 10.0)  # ignore stuck for first 10s
@@ -92,7 +92,7 @@ class SafetyMonitor(Node):
         # At 20Hz, 50ms frame movement is ~1cm at 0.2m/s — below threshold.
         # At 0.5s window, even slow navigation (0.05m/s) moves 2.5cm > threshold.
         self._pos_sample_time: float = time.time()
-        self._pos_sample_interval: float = 0.5  # seconds between position snapshots
+        self._pos_sample_interval: float = 0.25  # seconds between position snapshots
 
         # Command activity tracking — when did continuous motor commands start?
         self._cmd_active_since: Optional[float] = None  # None = motors idle
