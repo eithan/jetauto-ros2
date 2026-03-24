@@ -88,6 +88,11 @@ class SafetyMonitor(Node):
         self._last_move_time: float = time.time()
         self._stuck_estop_active = False
         self._stuck_estop_start: float = 0.0
+        # Position sampling: compare against 0.5s-old position, not 50ms-old.
+        # At 20Hz, 50ms frame movement is ~1cm at 0.2m/s — below threshold.
+        # At 0.5s window, even slow navigation (0.05m/s) moves 2.5cm > threshold.
+        self._pos_sample_time: float = time.time()
+        self._pos_sample_interval: float = 0.5  # seconds between position snapshots
 
         # Command activity tracking — when did continuous motor commands start?
         self._cmd_active_since: Optional[float] = None  # None = motors idle
@@ -167,6 +172,10 @@ class SafetyMonitor(Node):
     def _check_stuck(self):
         """Check if robot is stuck using SLAM position + yaw (not odometry).
 
+        Samples position every 0.5s (not every 50ms frame). At 20Hz, per-frame
+        movement at 0.2m/s is only ~1cm — below the 2cm threshold, causing false
+        positives. Over a 0.5s window, even slow navigation (0.05m/s) moves 2.5cm.
+
         Rotation-in-place counts as movement — the robot is not stuck if it's
         actively turning (e.g., Nav2 orienting at goal).
         """
@@ -175,36 +184,41 @@ class SafetyMonitor(Node):
             return
 
         x, y, yaw = pose
+        now = time.time()
 
-        if self._last_slam_position is not None:
-            dx = x - self._last_slam_position[0]
-            dy = y - self._last_slam_position[1]
-            dist = math.sqrt(dx * dx + dy * dy)
+        # Only compare against position sampled 0.5s ago
+        if now - self._pos_sample_time >= self._pos_sample_interval:
+            if self._last_slam_position is not None:
+                dx = x - self._last_slam_position[0]
+                dy = y - self._last_slam_position[1]
+                dist = math.sqrt(dx * dx + dy * dy)
 
-            # Check yaw change (handle wraparound)
-            yaw_change = 0.0
-            if self._last_slam_yaw is not None:
-                yaw_change = abs(yaw - self._last_slam_yaw)
-                if yaw_change > math.pi:
-                    yaw_change = 2.0 * math.pi - yaw_change
+                # Check yaw change over the same window (handle wraparound)
+                yaw_change = 0.0
+                if self._last_slam_yaw is not None:
+                    yaw_change = abs(yaw - self._last_slam_yaw)
+                    if yaw_change > math.pi:
+                        yaw_change = 2.0 * math.pi - yaw_change
 
-            # Robot is "moving" if translating OR rotating significantly
-            # 0.05 rad ≈ 3° — enough to detect intentional rotation
-            is_moving = dist > self.stuck_move_threshold or yaw_change > 0.05
+                # Robot is "moving" if translating OR rotating significantly
+                # 0.05 rad ≈ 3° over 0.5s — enough to detect intentional rotation
+                is_moving = dist > self.stuck_move_threshold or yaw_change > 0.05
 
-            if is_moving:
-                self._last_move_time = time.time()
-                # Clear stuck if hold time has elapsed
-                if self._stuck_estop_active and self._recovery_state == self.RECOVERY_NONE:
-                    held = time.time() - self._stuck_estop_start
-                    if held >= self.stuck_hold_time:
-                        self.get_logger().info(
-                            f'[{_ts()}] ✅ Stuck e-stop cleared — robot moved after {held:.0f}s hold'
-                        )
-                        self._stuck_estop_active = False
+                if is_moving:
+                    self._last_move_time = now
+                    # Clear stuck if hold time has elapsed
+                    if self._stuck_estop_active and self._recovery_state == self.RECOVERY_NONE:
+                        held = now - self._stuck_estop_start
+                        if held >= self.stuck_hold_time:
+                            self.get_logger().info(
+                                f'[{_ts()}] ✅ Stuck e-stop cleared — robot moved after {held:.0f}s hold'
+                            )
+                            self._stuck_estop_active = False
 
-        self._last_slam_position = (x, y)
-        self._last_slam_yaw = yaw
+            # Update position snapshot
+            self._last_slam_position = (x, y)
+            self._last_slam_yaw = yaw
+            self._pos_sample_time = now
 
     def _publish_stuck_location(self):
         """Publish the current position as a stuck location for other nodes."""
