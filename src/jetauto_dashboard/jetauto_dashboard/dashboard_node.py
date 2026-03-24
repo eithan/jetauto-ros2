@@ -77,7 +77,7 @@ class DashboardNode(Node):
             'detections': [],       # last 5 detected objects
             'uptime': 0,
             'explore_running': False,
-            'explore_announce': False,  # TTS announcements for explore events
+            'explore_announce': True,   # TTS announcements for explore events (on by default)
             'face_enabled': False,
             'enrollment_active': False,
             'enrollment_status': None,  # latest JSON payload from enrollment_node
