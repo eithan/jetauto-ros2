@@ -83,12 +83,14 @@ class FrontierExplorer(Node):
         self.declare_parameter('stuck_escalation_ttl', 180.0)  # extra TTL per repeat
         self.declare_parameter('stuck_max_radius', 3.0)  # cap the exclusion zone
         self.declare_parameter('stuck_merge_radius', 1.5)  # merge nearby stuck events
+        self.declare_parameter('stuck_path_radius', 0.5)  # fixed radius for path-crossing check
         self.stuck_blacklist_radius = self.get_parameter('stuck_blacklist_radius').value
         self.stuck_location_ttl = self.get_parameter('stuck_location_ttl').value
         self.stuck_escalation_radius = self.get_parameter('stuck_escalation_radius').value
         self.stuck_escalation_ttl = self.get_parameter('stuck_escalation_ttl').value
         self.stuck_max_radius = self.get_parameter('stuck_max_radius').value
         self.stuck_merge_radius = self.get_parameter('stuck_merge_radius').value
+        self.stuck_path_radius = self.get_parameter('stuck_path_radius').value
 
         # State
         self._map: Optional[OccupancyGrid] = None
@@ -105,6 +107,8 @@ class FrontierExplorer(Node):
         self._last_good_position: Optional[Tuple[float, float]] = None
         # Whether we're in "retreat" mode (going back to last good position)
         self._retreating = False
+        # Counter for consecutive "all frontiers blocked" ticks
+        self._blocked_ticks = 0
 
         # TF
         self._tf_buffer = Buffer()
@@ -327,14 +331,17 @@ class FrontierExplorer(Node):
         for sx, sy, st, count in self._stuck_locations:
             if self._is_stuck_expired(st, count):
                 continue
-            radius = self._get_stuck_radius(count)
+            # Use a fixed smaller radius for path-crossing checks (not the escalating
+            # zone radius) — this keeps corridors passable while still avoiding the
+            # exact stuck spot. Escalated zones (count >= 2) use a bigger path radius.
+            path_radius = self.stuck_path_radius if count < 2 else self._get_stuck_radius(count) * 0.7
             # Project stuck point onto the line segment
             t = max(0.0, min(1.0, ((sx - x1) * dx + (sy - y1) * dy) / seg_len_sq))
             # Closest point on segment
             px = x1 + t * dx
             py = y1 + t * dy
             dist = math.sqrt((sx - px) ** 2 + (sy - py) ** 2)
-            if dist < radius:
+            if dist < path_radius:
                 return True
 
         return False
@@ -494,6 +501,8 @@ class FrontierExplorer(Node):
         scored.sort(key=lambda x: x[0], reverse=True)
 
         if not scored:
+            self._blocked_ticks += 1
+
             # First, prune expired stuck zones
             active_stuck = [
                 (sx, sy, st, c) for sx, sy, st, c in self._stuck_locations
@@ -502,24 +511,38 @@ class FrontierExplorer(Node):
             pruned = len(self._stuck_locations) - len(active_stuck)
             self._stuck_locations = active_stuck
 
+            # After ~30s of being fully blocked, clear first-time (count=1) stuck zones.
+            # These are likely Nav2 planning pauses / false positives rather than real walls.
+            # Confirmed repeat obstacles (count >= 2) are kept.
+            # replan_interval is 5s, so 6 ticks ≈ 30s.
+            cleared_first_time = 0
+            if self._blocked_ticks >= 6 and self._stuck_locations:
+                before = len(self._stuck_locations)
+                self._stuck_locations = [
+                    (sx, sy, st, c) for sx, sy, st, c in self._stuck_locations
+                    if c >= 2  # keep confirmed repeat obstacles
+                ]
+                cleared_first_time = before - len(self._stuck_locations)
+                if cleared_first_time:
+                    self._blocked_ticks = 0
+                    self.get_logger().warn(
+                        f'[{_ts()}] ⚠️ Blocked for 30s — cleared {cleared_first_time} first-time '
+                        f'stuck zone(s) to unblock exploration. '
+                        f'{len(self._stuck_locations)} confirmed zone(s) remain.'
+                    )
+
             self.get_logger().warn(
                 f'All frontiers scored negative (blocked/failed). '
                 f'Clearing {len(self._failed_goals)} failed goals'
                 f'{f", pruned {pruned} expired stuck zones" if pruned else ""}'
-                f'{f", {len(self._stuck_locations)} permanent stuck zones remain" if self._stuck_locations else ""}'
-                f' and retrying...'
+                f'{f", {len(self._stuck_locations)} stuck zone(s) remain" if self._stuck_locations else ""}'
+                f' and retrying... (blocked_ticks={self._blocked_ticks})'
             )
             self._failed_goals.clear()
-
-            # If all stuck zones are permanent (count >= 3) and blocking everything,
-            # don't clear them — the obstacles are real. Just clear failed goals.
-            if not self._stuck_locations:
-                return  # all cleared, retry will work
-
-            # If stuck zones remain but all frontiers are still blocked,
-            # the robot may need to explore in a completely different direction.
-            # Don't clear permanent stuck zones — they represent real obstacles.
             return
+
+        # Found a valid frontier — reset the blocked counter
+        self._blocked_ticks = 0
 
         # Navigate to best frontier centroid
         best_score, best_cluster = scored[0]
