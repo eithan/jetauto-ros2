@@ -745,6 +745,9 @@ class DashboardNode(Node):
         self._emit_state()
 
         if enabled:
+            # Ensure TTS is running if announce is on (explore may run without voice)
+            if self.state.get('explore_announce'):
+                self._launch_tts()
             self._launch_explore()
         else:
             self._kill_explore()
@@ -754,6 +757,9 @@ class DashboardNode(Node):
     def toggle_explore_announce(self, enabled: bool):
         self.state['explore_announce'] = enabled
         self._emit_state()
+        # If explore is already running and we just turned on announce, ensure TTS is up
+        if enabled and self.state.get('explore_running'):
+            self._launch_tts()
         self.get_logger().info(f'Explore announcements {"enabled" if enabled else "disabled"}')
 
     def toggle_face(self, enabled: bool):

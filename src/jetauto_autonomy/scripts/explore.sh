@@ -50,11 +50,30 @@ cleanup() {
     ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist \
       '{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}' 2>/dev/null
     
+    # Stop lidar motor to conserve battery
+    lidar_motor_stop
+
     echo -e "${GREEN}✅ All stopped${NC}"
     exit 0
 }
 
 trap cleanup SIGINT SIGTERM
+
+# ── Lidar motor helpers ──────────────────────────────────────────────────────
+# Calls the sllidar motor service if available; silently skips if not.
+lidar_motor_start() {
+    if ros2 service list 2>/dev/null | grep -q '/start_motor'; then
+        echo -e "${GREEN}  ⟳ Starting lidar motor...${NC}"
+        ros2 service call /start_motor std_srvs/srv/Empty {} 2>/dev/null || true
+    fi
+}
+
+lidar_motor_stop() {
+    if ros2 service list 2>/dev/null | grep -q '/stop_motor'; then
+        echo -e "${YELLOW}  ⏹ Stopping lidar motor...${NC}"
+        ros2 service call /stop_motor std_srvs/srv/Empty {} 2>/dev/null || true
+    fi
+}
 
 echo -e "${GREEN}🚗 JetAuto Autonomous Exploration${NC}"
 echo -e "${YELLOW}Ctrl+C to emergency stop everything${NC}"
@@ -67,8 +86,11 @@ ln -sfn "$LOG_DIR" "$HOME/ros2_ws/logs/explore_latest"
 echo -e "Logs: ${LOG_DIR}"
 echo ""
 
+# 0. Start lidar motor (if it was stopped to save battery)
+lidar_motor_start
+
 # 1. SLAM
-echo -e "${GREEN}[1/4] Starting SLAM...${NC}"
+echo -e "${GREEN}[1/5] Starting SLAM...${NC}"
 ros2 run slam_toolbox async_slam_toolbox_node --ros-args \
   --params-file "$CONFIG_DIR/slam_params.yaml" \
   --log-level warn \
@@ -83,7 +105,7 @@ fi
 echo -e "${GREEN}  ✓ SLAM running (PID $SLAM_PID)${NC}"
 
 # 2. Nav2
-echo -e "${GREEN}[2/4] Starting Nav2...${NC}"
+echo -e "${GREEN}[2/5] Starting Nav2...${NC}"
 ros2 launch nav2_bringup navigation_launch.py \
   params_file:="$CONFIG_DIR/nav2_params.yaml" \
   use_sim_time:=false autostart:=true \
