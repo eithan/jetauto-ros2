@@ -55,7 +55,7 @@ class SafetyMonitor(Node):
         self.declare_parameter('stuck_move_threshold', 0.02)  # 2cm minimum movement
         self.declare_parameter('stuck_hold_time', 15.0)  # hold for 15 seconds
         self.declare_parameter('startup_grace_period', 10.0)  # ignore stuck for first 10s
-        self.declare_parameter('cmd_active_threshold', 3.0)  # commands must be active 3s before stuck counts
+        self.declare_parameter('cmd_active_threshold', 5.0)  # commands must be active 5s before stuck counts
         self.declare_parameter('recovery_backup_speed', -0.20)  # m/s backward
         self.declare_parameter('recovery_strafe_speed', 0.25)  # m/s sideways
         self.declare_parameter('recovery_backup_duration', 2.0)  # seconds (~40cm backup)
@@ -391,7 +391,12 @@ class SafetyMonitor(Node):
                     stop = Twist()
                     self._cmd_pub.publish(stop)
             else:
-                # Motors idle — reset command tracking
+                # Motors idle — reset command tracking AND movement clock.
+                # When Nav2 pauses for replanning (sends zero vel), the robot is
+                # intentionally stopped — not stuck. Reset last_move_time so the
+                # "no movement" clock doesn't accumulate across idle periods.
+                if self._cmd_active_since is not None:
+                    self._last_move_time = time.time()
                 self._cmd_active_since = None
 
     def _cancel_nav2_goals(self):
