@@ -373,12 +373,22 @@ class DashboardNode(Node):
             self.get_logger().info('Auto-enabled voice on startup')
 
     def _stop_lidar_on_startup(self):
-        """Stop the lidar motor once on startup to conserve battery.
-        NOTE: /start_motor and /stop_motor are WHEEL motors on Hiwonder.
-        Lidar control is via /lidar_app/set_running — wired up once type confirmed."""
+        """Stop the lidar motor on dashboard startup to conserve battery.
+        /lidar_app/set_running (interfaces/srv/SetInt64): data=1 run, data=0 stop.
+        explore.sh will call set_running(1) when exploration begins."""
         self._lidar_stop_timer.cancel()
-        # TODO: implement once /lidar_app/set_running service type is confirmed
-        self.get_logger().info('Lidar motor stop skipped — /lidar_app/set_running type TBD')
+        try:
+            result = subprocess.run(
+                ['ros2', 'service', 'call', '/lidar_app/set_running',
+                 'interfaces/srv/SetInt64', '{data: 0}'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                self.get_logger().info('Lidar motor stopped on startup (battery save)')
+            else:
+                self.get_logger().info('Lidar /lidar_app/set_running not available')
+        except Exception as e:
+            self.get_logger().info(f'Lidar motor stop skipped: {e}')
 
     def _on_detections(self, msg):
         """Update detection state when detected labels change.

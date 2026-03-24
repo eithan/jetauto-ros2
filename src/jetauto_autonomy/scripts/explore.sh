@@ -62,15 +62,18 @@ trap cleanup SIGINT SIGTERM
 # ── Lidar motor helpers ──────────────────────────────────────────────────────
 # Calls the sllidar motor service if available; silently skips if not.
 lidar_motor_start() {
-    # /start_motor and /stop_motor are WHEEL motors — do NOT call them here.
-    # Lidar motor control is via /lidar_app/set_running (Hiwonder custom service).
-    # TODO: wire up /lidar_app/set_running once service type is confirmed.
-    echo -e "${GREEN}  ✓ Lidar motor check skipped (using /lidar_app/set_running — TBD)${NC}"
+    # Hiwonder lidar motor control: /lidar_app/set_running (interfaces/srv/SetInt64)
+    # data: 1 = running, data: 0 = stopped
+    echo -e "${GREEN}  ⟳ Starting lidar motor...${NC}"
+    ros2 service call /lidar_app/set_running interfaces/srv/SetInt64 "{data: 1}" \
+        2>/dev/null || true
+    sleep 2  # wait for motor to reach speed and scan data to flow
 }
 
 lidar_motor_stop() {
-    # See lidar_motor_start note above — placeholder until set_running is confirmed.
-    true
+    echo -e "${YELLOW}  ⏹ Stopping lidar motor (battery save)...${NC}"
+    ros2 service call /lidar_app/set_running interfaces/srv/SetInt64 "{data: 0}" \
+        2>/dev/null || true
 }
 
 echo -e "${GREEN}🚗 JetAuto Autonomous Exploration${NC}"
