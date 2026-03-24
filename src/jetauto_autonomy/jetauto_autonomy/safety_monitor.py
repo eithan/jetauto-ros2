@@ -200,9 +200,25 @@ class SafetyMonitor(Node):
                     if yaw_change > math.pi:
                         yaw_change = 2.0 * math.pi - yaw_change
 
-                # Robot is "moving" if translating OR rotating significantly
-                # 0.05 rad ≈ 3° over 0.5s — enough to detect intentional rotation
-                is_moving = dist > self.stuck_move_threshold or yaw_change > 0.05
+                # Position-based movement check
+                translating = dist > self.stuck_move_threshold
+                rotating = yaw_change > 0.05
+
+                # Wheel-slip check: robot commanded at speed but barely moving.
+                # Spinning wheels cause ~1-3cm SLAM oscillation per 0.5s despite
+                # Nav2 commanding 0.2-0.3m/s. Catch it by comparing cmd vs achieved.
+                wheel_slip = False
+                if self._last_cmd_vel is not None:
+                    cmd = self._last_cmd_vel
+                    commanded_xy = math.sqrt(
+                        cmd.linear.x ** 2 + cmd.linear.y ** 2
+                    )
+                    achieved_xy = dist / self._pos_sample_interval  # m/s
+                    # Wheel slip: commanded >15cm/s but achieved <10% of that
+                    if commanded_xy > 0.15 and achieved_xy < commanded_xy * 0.10:
+                        wheel_slip = True
+
+                is_moving = (translating or rotating) and not wheel_slip
 
                 if is_moving:
                     self._last_move_time = now

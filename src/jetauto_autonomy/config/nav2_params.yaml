@@ -277,8 +277,8 @@ local_costmap:
           obstacle_min_range: 0.3
           raytrace_max_range: 3.5
           raytrace_min_range: 0.3
-          clearing: true              # LOCAL costmap: allow clearing so DWB stays clean
-          marking: true               # Global costmap handles persistent bed/furniture memory
+          clearing: false             # MUST be false — lidar raytrace passes under bed frames
+          marking: true               # and would erase depth cam obstacle, making bed invisible
           sensor_frame: depth_cam_link
       # Same virtual obstacle layer in local costmap — DWB needs to see these too
       virtual_obstacle_layer:
