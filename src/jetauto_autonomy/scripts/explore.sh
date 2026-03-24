@@ -62,10 +62,15 @@ trap cleanup SIGINT SIGTERM
 # ── Lidar motor helpers ──────────────────────────────────────────────────────
 # Calls the sllidar motor service if available; silently skips if not.
 lidar_motor_start() {
-    if ros2 service list 2>/dev/null | grep -q '/start_motor'; then
-        echo -e "${GREEN}  ⟳ Starting lidar motor...${NC}"
-        ros2 service call /start_motor std_srvs/srv/Empty {} 2>/dev/null || true
+    # Only start the motor if scan data is NOT already flowing (avoids resetting
+    # a motor that's already running, which briefly interrupts scan data)
+    if ros2 topic hz /scan --window 3 2>/dev/null | grep -q 'average rate'; then
+        echo -e "${GREEN}  ✓ Lidar already running — skipping start_motor${NC}"
+        return
     fi
+    echo -e "${GREEN}  ⟳ Starting lidar motor...${NC}"
+    ros2 service call /start_motor std_srvs/srv/Empty {} 2>/dev/null || true
+    sleep 2  # wait for motor to reach speed
 }
 
 lidar_motor_stop() {
