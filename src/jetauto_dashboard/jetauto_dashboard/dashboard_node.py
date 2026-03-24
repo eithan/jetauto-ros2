@@ -162,8 +162,9 @@ class DashboardNode(Node):
         self._startup_done = False
         self._startup_timer = self.create_timer(3.0, self._on_startup)
 
-        # -- Stop lidar motor on startup (conserve battery when not exploring) --
-        # 15s delay: sllidar_node needs time to register /stop_motor after boot.
+        # Lidar motor management removed — /stop_motor is wheel motors, not lidar.
+        # lidar_app node needs to be running for real lidar motor control — not worth the
+        # complexity for <1W savings. Left as no-op timer to avoid breaking the attr ref.
         self._lidar_stop_timer = self.create_timer(15.0, self._stop_lidar_on_startup)
 
         # -- System monitor (reads temps/battery from sysfs directly) --
@@ -373,22 +374,8 @@ class DashboardNode(Node):
             self.get_logger().info('Auto-enabled voice on startup')
 
     def _stop_lidar_on_startup(self):
-        """Stop the lidar motor on startup to conserve battery.
-        Uses sllidar_node's /stop_motor service (std_srvs/srv/Empty).
-        explore.sh calls /start_motor when exploration begins."""
+        """No-op — lidar motor management removed (see comment in __init__)."""
         self._lidar_stop_timer.cancel()
-        try:
-            result = subprocess.run(
-                ['ros2', 'service', 'call', '/stop_motor',
-                 'std_srvs/srv/Empty', '{}'],
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0:
-                self.get_logger().info('Lidar motor stopped on startup (battery save)')
-            else:
-                self.get_logger().info('Lidar /stop_motor not available — motor left running')
-        except Exception as e:
-            self.get_logger().info(f'Lidar motor stop skipped: {e}')
 
     def _on_detections(self, msg):
         """Update detection state when detected labels change.
