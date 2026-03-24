@@ -204,9 +204,9 @@ global_costmap:
           topic: /depth_cam/depth/points
           data_type: PointCloud2
           max_obstacle_height: 0.80   # beds, chairs, tables
-          min_obstacle_height: 0.10   # ignore floor noise + robot chassis (was 0.03)
+          min_obstacle_height: 0.07   # 7cm — catches bed frames (~10-15cm clearance)
           obstacle_max_range: 3.0
-          obstacle_min_range: 0.3     # was 0.2 — avoid marking robot's own body
+          obstacle_min_range: 0.3     # avoid marking robot's own body
           raytrace_max_range: 3.5
           raytrace_min_range: 0.3
           clearing: false             # depth obstacles PERSIST in global costmap
@@ -272,7 +272,7 @@ local_costmap:
           topic: /depth_cam/depth/points
           data_type: PointCloud2
           max_obstacle_height: 0.80
-          min_obstacle_height: 0.10   # match global costmap — ignore floor noise
+          min_obstacle_height: 0.07   # match global costmap
           obstacle_max_range: 3.0
           obstacle_min_range: 0.3
           raytrace_max_range: 3.5
