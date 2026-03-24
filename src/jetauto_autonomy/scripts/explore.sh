@@ -115,6 +115,15 @@ sleep 5
 
 echo -e "${GREEN}  ✓ Nav2 running (PID $NAV2_PID)${NC}"
 
+# Clear costmaps once Nav2 is up — flushes any depth-camera startup artifacts
+# before we begin exploring. Depth cam sometimes marks floor/chassis noise at boot.
+echo -e "${GREEN}  ⟳ Clearing startup costmap artifacts...${NC}"
+ros2 service call /global_costmap/clear_entirely_global_costmap \
+  nav2_msgs/srv/ClearEntirelyGlobalCostmap {} 2>/dev/null || true
+ros2 service call /local_costmap/clear_entirely_local_costmap \
+  nav2_msgs/srv/ClearEntirelyLocalCostmap {} 2>/dev/null || true
+sleep 1
+
 # 3. Safety monitor
 echo -e "${GREEN}[3/5] Starting safety monitor...${NC}"
 ros2 run jetauto_autonomy safety_monitor --ros-args --log-level info \
