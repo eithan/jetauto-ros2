@@ -163,8 +163,8 @@ class DashboardNode(Node):
         self._startup_timer = self.create_timer(3.0, self._on_startup)
 
         # -- Stop lidar motor on startup (conserve battery when not exploring) --
-        # Delayed to give the lidar node time to fully start and register its services.
-        self._lidar_stop_timer = self.create_timer(8.0, self._stop_lidar_on_startup)
+        # 15s delay: sllidar_node needs time to register /stop_motor after boot.
+        self._lidar_stop_timer = self.create_timer(15.0, self._stop_lidar_on_startup)
 
         # -- System monitor (reads temps/battery from sysfs directly) --
         monitor_interval = self.get_parameter('system_monitor_interval').value
@@ -373,20 +373,20 @@ class DashboardNode(Node):
             self.get_logger().info('Auto-enabled voice on startup')
 
     def _stop_lidar_on_startup(self):
-        """Stop the lidar motor on dashboard startup to conserve battery.
-        /lidar_app/set_running (interfaces/srv/SetInt64): data=1 run, data=0 stop.
-        explore.sh will call set_running(1) when exploration begins."""
+        """Stop the lidar motor on startup to conserve battery.
+        Uses sllidar_node's /stop_motor service (std_srvs/srv/Empty).
+        explore.sh calls /start_motor when exploration begins."""
         self._lidar_stop_timer.cancel()
         try:
             result = subprocess.run(
-                ['ros2', 'service', 'call', '/lidar_app/set_running',
-                 'interfaces/srv/SetInt64', '{data: 0}'],
+                ['ros2', 'service', 'call', '/stop_motor',
+                 'std_srvs/srv/Empty', '{}'],
                 capture_output=True, text=True, timeout=5
             )
             if result.returncode == 0:
                 self.get_logger().info('Lidar motor stopped on startup (battery save)')
             else:
-                self.get_logger().info('Lidar /lidar_app/set_running not available')
+                self.get_logger().info('Lidar /stop_motor not available — motor left running')
         except Exception as e:
             self.get_logger().info(f'Lidar motor stop skipped: {e}')
 

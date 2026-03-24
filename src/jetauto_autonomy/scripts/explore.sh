@@ -62,18 +62,21 @@ trap cleanup SIGINT SIGTERM
 # ── Lidar motor helpers ──────────────────────────────────────────────────────
 # Calls the sllidar motor service if available; silently skips if not.
 lidar_motor_start() {
-    # Hiwonder lidar motor control: /lidar_app/set_running (interfaces/srv/SetInt64)
-    # data: 1 = running, data: 0 = stopped
+    # /stop_motor and /start_motor are sllidar_node services (std_srvs/srv/Empty)
+    # Only call start_motor if scan is NOT already flowing — calling it while
+    # the motor is already running causes a brief reset that breaks SLAM.
+    if timeout 2 ros2 topic echo /scan --once 2>/dev/null | grep -q 'header'; then
+        echo -e "${GREEN}  ✓ Lidar already spinning — skipping start_motor${NC}"
+        return
+    fi
     echo -e "${GREEN}  ⟳ Starting lidar motor...${NC}"
-    ros2 service call /lidar_app/set_running interfaces/srv/SetInt64 "{data: 1}" \
-        2>/dev/null || true
-    sleep 2  # wait for motor to reach speed and scan data to flow
+    ros2 service call /start_motor std_srvs/srv/Empty '{}' 2>/dev/null || true
+    sleep 3  # wait for motor to reach speed and scan data to flow
 }
 
 lidar_motor_stop() {
     echo -e "${YELLOW}  ⏹ Stopping lidar motor (battery save)...${NC}"
-    ros2 service call /lidar_app/set_running interfaces/srv/SetInt64 "{data: 0}" \
-        2>/dev/null || true
+    ros2 service call /stop_motor std_srvs/srv/Empty '{}' 2>/dev/null || true
 }
 
 echo -e "${GREEN}🚗 JetAuto Autonomous Exploration${NC}"
