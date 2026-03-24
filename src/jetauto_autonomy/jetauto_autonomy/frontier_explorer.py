@@ -98,6 +98,7 @@ class FrontierExplorer(Node):
         self._start_time = None
         self._current_goal_handle = None
         self._failed_goals: List[Tuple[float, float]] = []
+        self._aborted_goals: List[Tuple[float, float]] = []  # Nav2-aborted: larger exclusion
         # Stuck locations with escalation: (x, y, first_time, count)
         # count tracks how many times stuck was detected near this spot
         self._stuck_locations: List[Tuple[float, float, float, int]] = []
@@ -365,6 +366,11 @@ class FrontierExplorer(Node):
             if math.sqrt((wx - fx) ** 2 + (wy - fy) ** 2) < 0.5:
                 return -1.0
 
+        # Skip frontiers near Nav2-aborted goals (1.5m radius — path was unplannable)
+        for ax, ay in self._aborted_goals:
+            if math.sqrt((wx - ax) ** 2 + (wy - ay) ** 2) < 1.5:
+                return -1.0
+
         # Skip frontiers near active stuck locations (escalating radius + TTL)
         for sx, sy, st, count in self._stuck_locations:
             if self._is_stuck_expired(st, count):
@@ -533,12 +539,13 @@ class FrontierExplorer(Node):
 
             self.get_logger().warn(
                 f'All frontiers scored negative (blocked/failed). '
-                f'Clearing {len(self._failed_goals)} failed goals'
+                f'Clearing {len(self._failed_goals)} failed + {len(self._aborted_goals)} aborted goals'
                 f'{f", pruned {pruned} expired stuck zones" if pruned else ""}'
                 f'{f", {len(self._stuck_locations)} stuck zone(s) remain" if self._stuck_locations else ""}'
                 f' and retrying... (blocked_ticks={self._blocked_ticks})'
             )
             self._failed_goals.clear()
+            self._aborted_goals.clear()
             return
 
         # Found a valid frontier — reset the blocked counter
@@ -624,9 +631,12 @@ class FrontierExplorer(Node):
             self._last_good_position = (x, y)
             self._publish_event(f'✅ Reached frontier ({self._goals_reached} explored)')
         elif status == GoalStatus.STATUS_ABORTED:
-            self.get_logger().warn(f'[{_ts()}] ❌ Failed to reach ({x:.2f}, {y:.2f}) — aborted')
-            self._failed_goals.append((x, y))
-            self._publish_event('❌ Frontier unreachable — picking another')
+            # Nav2 aborted = couldn't plan or execute path at all.
+            # Use a larger exclusion radius (1.5m) vs canceled goals (0.5m) —
+            # the whole area around that frontier is likely unreachable.
+            self.get_logger().warn(f'[{_ts()}] ❌ Nav2 aborted ({x:.2f}, {y:.2f}) — nav path failed, blacklisting 1.5m radius')
+            self._aborted_goals.append((x, y))
+            self._publish_event('❌ Frontier nav-failed — picking another')
         elif status == GoalStatus.STATUS_CANCELED:
             self.get_logger().info(f'[{_ts()}] ⏹ Goal ({x:.2f}, {y:.2f}) canceled — marking as failed')
             self._failed_goals.append((x, y))
