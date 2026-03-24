@@ -374,21 +374,11 @@ class DashboardNode(Node):
 
     def _stop_lidar_on_startup(self):
         """Stop the lidar motor once on startup to conserve battery.
-        Runs 8s after launch to give the lidar node time to register its services.
-        explore.sh will restart the motor when exploration begins."""
+        NOTE: /start_motor and /stop_motor are WHEEL motors on Hiwonder.
+        Lidar control is via /lidar_app/set_running — wired up once type confirmed."""
         self._lidar_stop_timer.cancel()
-        try:
-            result = subprocess.run(
-                ['ros2', 'service', 'call', '/stop_motor',
-                 'std_srvs/srv/Empty', '{}'],
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0:
-                self.get_logger().info('Lidar motor stopped on startup (battery save)')
-            else:
-                self.get_logger().info('Lidar /stop_motor not available — motor left running')
-        except Exception as e:
-            self.get_logger().info(f'Lidar motor stop skipped: {e}')
+        # TODO: implement once /lidar_app/set_running service type is confirmed
+        self.get_logger().info('Lidar motor stop skipped — /lidar_app/set_running type TBD')
 
     def _on_detections(self, msg):
         """Update detection state when detected labels change.
