@@ -138,27 +138,34 @@ class EnrollmentNode(Node):
         self.get_logger().info(f'Starting enrollment for "{name}"')
         threading.Thread(target=self._load_and_start, daemon=True).start()
 
+    @staticmethod
+    def _log(msg: str):
+        """Print with flush — rclpy logger is unreliable from background threads."""
+        import sys
+        print(f'[enrollment] {msg}', flush=True)
+        sys.stdout.flush()
+
     def _load_and_start(self):
         """Load InsightFace model (runs in background thread)."""
         try:
-            self.get_logger().info('Importing insightface...')
+            self._log('Importing insightface...')
             from insightface.app import FaceAnalysis
-            self.get_logger().info('insightface imported OK')
+            self._log('insightface imported OK')
 
             model = self.get_parameter('model_name').value
             gpu_id = self.get_parameter('gpu_id').value
             det_size = self.get_parameter('det_size').value
 
-            self.get_logger().info(f'Loading model "{model}" (gpu_id={gpu_id}) — may take 1-3 min on first run')
+            self._log(f'Loading model "{model}" gpu_id={gpu_id} — may take 1-3 min first run')
             providers = (
                 [('CUDAExecutionProvider', {'device_id': gpu_id}), 'CPUExecutionProvider']
                 if gpu_id >= 0 else ['CPUExecutionProvider']
             )
-            self.get_logger().info('Creating FaceAnalysis instance...')
+            self._log('Creating FaceAnalysis instance...')
             self.app = FaceAnalysis(name=model, providers=providers)
-            self.get_logger().info('Running app.prepare() — loading ONNX models...')
+            self._log('Running app.prepare() (slow ONNX load)...')
             self.app.prepare(ctx_id=gpu_id, det_size=(det_size, det_size))
-            self.get_logger().info('Model ready!')
+            self._log('Model ready!')
 
             # Subscribe to camera now that model is ready
             topic = self.get_parameter('image_topic').value
@@ -177,12 +184,16 @@ class EnrollmentNode(Node):
                 "Please face the camera and hold still."
             )
 
-        except ImportError:
+        except ImportError as e:
             self._state = 'error'
+            self._log(f'ERROR: insightface import failed: {e}')
             self._publish_status('insightface not installed on this machine')
             self.get_logger().error('insightface not installed')
         except Exception as e:
             self._state = 'error'
+            self._log(f'ERROR: model load failed: {e}')
+            import traceback
+            self._log(traceback.format_exc())
             self._publish_status(f'Model load failed: {e}')
             self.get_logger().error(f'Model load error: {e}')
 
