@@ -96,6 +96,12 @@ class SafetyMonitor(Node):
         # Handles the case where the robot is wedged but mecanum wheels still rotate.
         self._last_translate_time: float = time.time()
         self._rotate_grace: float = 4.0  # seconds rotation allowed without translation
+        # Long-window net displacement check: a robot zigzagging under a bed makes
+        # small movements that reset short-window stuck checks, but its NET position
+        # barely changes. Check net displacement over 10s — if < 15cm, force stuck.
+        self._long_window_interval: float = 10.0
+        self._long_window_pos: Optional[Tuple[float, float]] = None
+        self._long_window_time: float = time.time()
 
         # Command activity tracking — when did continuous motor commands start?
         self._cmd_active_since: Optional[float] = None  # None = motors idle
@@ -247,6 +253,30 @@ class SafetyMonitor(Node):
             self._last_slam_yaw = yaw
             self._pos_sample_time = now
 
+        # ── Long-window net displacement check ─────────────────────────────
+        # Short-window checks get reset by tiny zigzag movements (e.g. robot
+        # fighting a bed frame: makes 2-3cm steps but net position barely moves).
+        # Check NET displacement over 10s — if commands active and < 15cm net,
+        # force stuck timers to expire so normal stuck logic fires next tick.
+        if now - self._long_window_time >= self._long_window_interval:
+            if (self._long_window_pos is not None
+                    and self._cmd_active_since is not None
+                    and not self._stuck_estop_active
+                    and (now - self._cmd_active_since) > self._long_window_interval):
+                dx = x - self._long_window_pos[0]
+                dy = y - self._long_window_pos[1]
+                net_disp = math.sqrt(dx * dx + dy * dy)
+                if net_disp < 0.15:  # < 15cm net in 10s = no real progress
+                    self.get_logger().warn(
+                        f'[{_ts()}] ⚠️ Long-window stuck: only {net_disp:.2f}m net '
+                        f'displacement in {self._long_window_interval:.0f}s — forcing stuck'
+                    )
+                    # Force both timers to expire so stuck fires on next check tick
+                    self._last_translate_time = 0.0
+                    self._last_move_time = 0.0
+            self._long_window_pos = (x, y)
+            self._long_window_time = now
+
     def _publish_stuck_location(self):
         """Publish the current position as a stuck location for other nodes."""
         pose = self._get_slam_pose()
@@ -295,6 +325,8 @@ class SafetyMonitor(Node):
                 # Reset move/translate time so stuck detection doesn't immediately re-trigger
                 self._last_move_time = time.time()
                 self._last_translate_time = time.time()
+                self._long_window_pos = None
+                self._long_window_time = time.time()
 
         elif self._recovery_state == self.RECOVERY_HOLD:
             # Hold for a few seconds, then clear
@@ -308,6 +340,8 @@ class SafetyMonitor(Node):
                 self._cmd_active_since = None
                 self._last_move_time = time.time()
                 self._last_translate_time = time.time()
+                self._long_window_pos = None
+                self._long_window_time = time.time()
                 self.get_logger().info(
                     f'[{_ts()}] 🟢 Recovery hold complete — resuming exploration'
                 )
@@ -441,6 +475,8 @@ class SafetyMonitor(Node):
                 if self._cmd_active_since is not None:
                     self._last_move_time = time.time()
                     self._last_translate_time = time.time()
+                self._long_window_pos = None
+                self._long_window_time = time.time()
                 self._cmd_active_since = None
 
     def _cancel_nav2_goals(self):
