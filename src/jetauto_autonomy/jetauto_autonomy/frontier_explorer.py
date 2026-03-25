@@ -551,11 +551,16 @@ class FrontierExplorer(Node):
         # Found a valid frontier — reset the blocked counter
         self._blocked_ticks = 0
 
-        # Navigate to best frontier centroid
+        # Navigate to best frontier centroid — but validate the centroid is free.
+        # Large/non-convex clusters can have centroids in unknown or occupied space,
+        # causing Nav2 to reject the goal immediately ("nav path failed").
+        # Instead: find the frontier cell closest to the centroid as the actual goal.
         best_score, best_cluster = scored[0]
         cx = sum(c[0] for c in best_cluster) / len(best_cluster)
         cy = sum(c[1] for c in best_cluster) / len(best_cluster)
-        wx, wy = self._grid_to_world(int(cx), int(cy))
+        # Snap to nearest frontier cell (all frontier cells are guaranteed FREE)
+        nearest = min(best_cluster, key=lambda c: (c[0] - cx) ** 2 + (c[1] - cy) ** 2)
+        wx, wy = self._grid_to_world(int(nearest[0]), int(nearest[1]))
 
         self.get_logger().info(
             f'[{_ts()}] Exploring frontier at ({wx:.2f}, {wy:.2f}) — '
