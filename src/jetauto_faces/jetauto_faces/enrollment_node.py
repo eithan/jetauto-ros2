@@ -28,7 +28,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
-from cv_bridge import CvBridge
+import numpy as _np  # used for manual ROS→OpenCV image conversion (no cv_bridge needed)
 
 
 # Spoken pose guidance — index N is the prompt after capture N (to set up capture N+1).
@@ -61,7 +61,7 @@ class EnrollmentNode(Node):
         self.declare_parameter('face_stable_seconds', 2.0)
 
         # -- Internal state --
-        self.bridge = CvBridge()
+        # No cv_bridge — use manual numpy conversion (cv_bridge compiled against numpy 1.x)
         self.app = None            # InsightFace FaceAnalysis (loaded on demand)
 
         self._state: str = 'idle'
@@ -186,10 +186,33 @@ class EnrollmentNode(Node):
             self._publish_status(f'Model load failed: {e}')
             self.get_logger().error(f'Model load error: {e}')
 
+    @staticmethod
+    def _ros_image_to_cv2(msg: Image):
+        """Convert ROS Image to OpenCV BGR frame without cv_bridge.
+        Avoids numpy ABI incompatibility (cv_bridge compiled against numpy 1.x)."""
+        import cv2
+        enc = msg.encoding.lower()
+        if enc in ('bgr8', 'rgb8'):
+            img = _np.frombuffer(msg.data, dtype=_np.uint8).reshape(
+                msg.height, msg.width, 3).copy()
+            if enc == 'rgb8':
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        elif enc in ('bgra8', 'rgba8'):
+            img = _np.frombuffer(msg.data, dtype=_np.uint8).reshape(
+                msg.height, msg.width, 4).copy()
+            img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR if enc == 'bgra8' else cv2.COLOR_RGBA2BGR)
+        elif enc == 'mono8':
+            img = _np.frombuffer(msg.data, dtype=_np.uint8).reshape(
+                msg.height, msg.width).copy()
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        else:
+            raise ValueError(f'Unsupported image encoding: {msg.encoding}')
+        return img
+
     def _on_image(self, msg: Image):
         """Buffer the latest camera frame (non-blocking)."""
         try:
-            frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding=self._enc)
+            frame = self._ros_image_to_cv2(msg)
             with self._frame_lock:
                 self._latest_frame = frame
         except Exception:
