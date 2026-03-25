@@ -622,15 +622,25 @@ class DashboardNode(Node):
     # -- Enrollment node --
 
     def _launch_enrollment(self):
-        """Launch enrollment_node via enrollment.launch.py."""
+        """Launch enrollment_node via enrollment.launch.py, logging to file."""
         if self._proc_alive(self._enrollment_proc):
             return
         try:
+            import pathlib
+            log_dir = pathlib.Path.home() / 'ros2_ws' / 'logs'
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / 'enrollment.log'
+            self._enrollment_log = open(log_path, 'w')
             self._enrollment_proc = subprocess.Popen(
                 ['ros2', 'launch', 'jetauto_faces', 'enrollment.launch.py'],
+                stdout=self._enrollment_log,
+                stderr=subprocess.STDOUT,
                 preexec_fn=os.setsid,
             )
-            self.get_logger().info(f'Enrollment node launched (pid {self._enrollment_proc.pid})')
+            self.get_logger().info(
+                f'Enrollment node launched (pid {self._enrollment_proc.pid}) '
+                f'— log: {log_path}'
+            )
         except Exception as e:
             self.get_logger().error(f'Failed to launch enrollment node: {e}')
 

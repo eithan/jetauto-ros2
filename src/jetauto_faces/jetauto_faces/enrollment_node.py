@@ -141,18 +141,24 @@ class EnrollmentNode(Node):
     def _load_and_start(self):
         """Load InsightFace model (runs in background thread)."""
         try:
+            self.get_logger().info('Importing insightface...')
             from insightface.app import FaceAnalysis
+            self.get_logger().info('insightface imported OK')
 
             model = self.get_parameter('model_name').value
             gpu_id = self.get_parameter('gpu_id').value
             det_size = self.get_parameter('det_size').value
 
+            self.get_logger().info(f'Loading model "{model}" (gpu_id={gpu_id}) — may take 1-3 min on first run')
             providers = (
                 [('CUDAExecutionProvider', {'device_id': gpu_id}), 'CPUExecutionProvider']
                 if gpu_id >= 0 else ['CPUExecutionProvider']
             )
+            self.get_logger().info('Creating FaceAnalysis instance...')
             self.app = FaceAnalysis(name=model, providers=providers)
+            self.get_logger().info('Running app.prepare() — loading ONNX models...')
             self.app.prepare(ctx_id=gpu_id, det_size=(det_size, det_size))
+            self.get_logger().info('Model ready!')
 
             # Subscribe to camera now that model is ready
             topic = self.get_parameter('image_topic').value
