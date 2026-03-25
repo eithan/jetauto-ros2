@@ -99,7 +99,7 @@ class SafetyMonitor(Node):
         # Long-window net displacement check: a robot zigzagging under a bed makes
         # small movements that reset short-window stuck checks, but its NET position
         # barely changes. Check net displacement over 10s — if < 15cm, force stuck.
-        self._long_window_interval: float = 10.0
+        self._long_window_interval: float = 7.0   # was 10s — check net displacement every 7s
         self._long_window_pos: Optional[Tuple[float, float]] = None
         self._long_window_time: float = time.time()
 
@@ -266,14 +266,21 @@ class SafetyMonitor(Node):
                 dx = x - self._long_window_pos[0]
                 dy = y - self._long_window_pos[1]
                 net_disp = math.sqrt(dx * dx + dy * dy)
-                if net_disp < 0.15:  # < 15cm net in 10s = no real progress
+                # Skip if Nav2 is commanding pure rotation (RotateToGoal at goal arrival)
+                commanding_linear = False
+                if self._last_cmd_vel is not None:
+                    cmd = self._last_cmd_vel
+                    commanding_linear = math.sqrt(
+                        cmd.linear.x ** 2 + cmd.linear.y ** 2
+                    ) > 0.05
+                if net_disp < 0.10 and commanding_linear:  # < 10cm net, not pure rotation
                     self.get_logger().warn(
                         f'[{_ts()}] ⚠️ Long-window stuck: only {net_disp:.2f}m net '
                         f'displacement in {self._long_window_interval:.0f}s — forcing stuck'
                     )
-                    # Force both timers to expire so stuck fires on next check tick
-                    self._last_translate_time = 0.0
-                    self._last_move_time = 0.0
+                    # Force timers to expire — use now-timeout so log shows sane elapsed time
+                    self._last_translate_time = now - self._rotate_grace - 1.0
+                    self._last_move_time = now - self.stuck_timeout - 1.0
             self._long_window_pos = (x, y)
             self._long_window_time = now
 
