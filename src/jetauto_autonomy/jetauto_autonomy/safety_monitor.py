@@ -88,11 +88,14 @@ class SafetyMonitor(Node):
         self._last_move_time: float = time.time()
         self._stuck_estop_active = False
         self._stuck_estop_start: float = 0.0
-        # Position sampling: compare against 0.5s-old position, not 50ms-old.
-        # At 20Hz, 50ms frame movement is ~1cm at 0.2m/s — below threshold.
-        # At 0.5s window, even slow navigation (0.05m/s) moves 2.5cm > threshold.
+        # Position sampling: compare against 0.25s-old position, not 50ms-old.
         self._pos_sample_time: float = time.time()
         self._pos_sample_interval: float = 0.25  # seconds between position snapshots
+        # Separate translation tracker: rotation-only "movement" is capped at
+        # rotate_grace seconds. After that, spinning without going anywhere = stuck.
+        # Handles the case where the robot is wedged but mecanum wheels still rotate.
+        self._last_translate_time: float = time.time()
+        self._rotate_grace: float = 4.0  # seconds rotation allowed without translation
 
         # Command activity tracking — when did continuous motor commands start?
         self._cmd_active_since: Optional[float] = None  # None = motors idle
@@ -205,8 +208,8 @@ class SafetyMonitor(Node):
                 rotating = yaw_change > 0.05
 
                 # Wheel-slip check: robot commanded at speed but barely moving.
-                # Spinning wheels cause ~1-3cm SLAM oscillation per 0.5s despite
-                # Nav2 commanding 0.2-0.3m/s. Catch it by comparing cmd vs achieved.
+                # Spinning wheels cause ~1-3cm SLAM oscillation despite Nav2
+                # commanding 0.2-0.3m/s. Catch it by comparing cmd vs achieved.
                 wheel_slip = False
                 if self._last_cmd_vel is not None:
                     cmd = self._last_cmd_vel
@@ -218,7 +221,15 @@ class SafetyMonitor(Node):
                     if commanded_xy > 0.15 and achieved_xy < commanded_xy * 0.10:
                         wheel_slip = True
 
-                is_moving = (translating or rotating) and not wheel_slip
+                # Track last time we actually translated (not just rotated).
+                # Rotation-only is valid for a grace period (goal approach, replanning),
+                # but if the robot spins without going anywhere for > rotate_grace seconds,
+                # it's stuck against an obstacle (e.g. wedged sideways under a bed).
+                if translating:
+                    self._last_translate_time = now
+
+                rotate_counts = (now - self._last_translate_time) < self._rotate_grace
+                is_moving = (translating or (rotating and rotate_counts)) and not wheel_slip
 
                 if is_moving:
                     self._last_move_time = now
@@ -281,8 +292,9 @@ class SafetyMonitor(Node):
                 self.get_logger().info(
                     f'[{_ts()}] ✅ Recovery maneuver complete — holding for replan'
                 )
-                # Reset move time so stuck detection doesn't immediately re-trigger
+                # Reset move/translate time so stuck detection doesn't immediately re-trigger
                 self._last_move_time = time.time()
+                self._last_translate_time = time.time()
 
         elif self._recovery_state == self.RECOVERY_HOLD:
             # Hold for a few seconds, then clear
@@ -295,6 +307,7 @@ class SafetyMonitor(Node):
                 # doesn't immediately re-trigger with stale cumulative time
                 self._cmd_active_since = None
                 self._last_move_time = time.time()
+                self._last_translate_time = time.time()
                 self.get_logger().info(
                     f'[{_ts()}] 🟢 Recovery hold complete — resuming exploration'
                 )
@@ -427,6 +440,7 @@ class SafetyMonitor(Node):
                 # "no movement" clock doesn't accumulate across idle periods.
                 if self._cmd_active_since is not None:
                     self._last_move_time = time.time()
+                    self._last_translate_time = time.time()
                 self._cmd_active_since = None
 
     def _cancel_nav2_goals(self):
