@@ -180,8 +180,12 @@ global_costmap:
       rolling_window: true
       width: 20
       height: 20
-      plugins: ['scan_obstacle_layer', 'depth_obstacle_layer', 'virtual_obstacle_layer', 'inflation_layer']
-      # Separate layers: lidar clearing can't erase depth camera or virtual obstacles
+      plugins: ['scan_obstacle_layer', 'virtual_obstacle_layer', 'inflation_layer']
+      # Global costmap uses ONLY lidar + virtual obstacles for A* path planning.
+      # Depth camera removed from global — it accumulated sticky obstacles that
+      # blocked large map areas and caused Nav2 planning timeouts on every frontier.
+      # Virtual obstacles (injected on stuck detection) handle invisible obstacles
+      # like bed frames permanently once the robot discovers them.
       scan_obstacle_layer:
         plugin: nav2_costmap_2d::ObstacleLayer
         enabled: true
@@ -196,22 +200,6 @@ global_costmap:
           raytrace_min_range: 0.0
           obstacle_max_range: 6.0
           obstacle_min_range: 0.0
-      depth_obstacle_layer:
-        plugin: nav2_costmap_2d::ObstacleLayer
-        enabled: true
-        observation_sources: depth
-        depth:
-          topic: /depth_cam/depth/points
-          data_type: PointCloud2
-          max_obstacle_height: 0.80   # beds, chairs, tables
-          min_obstacle_height: 0.07   # 7cm — catches bed frames (~10-15cm clearance)
-          obstacle_max_range: 3.0
-          obstacle_min_range: 0.3     # avoid marking robot's own body
-          raytrace_max_range: 3.5
-          raytrace_min_range: 0.3
-          clearing: false             # depth obstacles PERSIST in global costmap
-          marking: true
-          sensor_frame: depth_cam_link
       # Virtual obstacles injected when stuck is detected — teaches Nav2 about
       # invisible obstacles (beds, low tables) that neither lidar nor camera caught
       virtual_obstacle_layer:
