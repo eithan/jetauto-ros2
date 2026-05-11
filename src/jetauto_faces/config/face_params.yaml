@@ -9,11 +9,10 @@ face_recognition_node:
     detection_topic: "/detected_objects"
 
     # --- InsightFace model ---
-    # Model name for insightface app (uses buffalo_l by default)
-    # buffalo_l: best accuracy, ~600MB
-    # buffalo_s: smaller/faster, ~200MB
-    # buffalo_sc: smallest, ~100MB (face detection only, no recognition)
-    model_name: "buffalo_l"
+    # buffalo_l: best accuracy, ~170MB ONNX — slow first-run ONNX compile, requires internet on first use
+    # buffalo_s: good accuracy, ~80MB ONNX — fast load, recommended for Jetson
+    # buffalo_sc: detection only, ~20MB — no face recognition/embedding
+    model_name: "buffalo_s"
     # Detection size — larger = more accurate face detection but slower
     det_size: 640
     # GPU device id (-1 for CPU)
@@ -47,3 +46,14 @@ face_recognition_node:
     # Publish annotated image with face bounding boxes and names
     publish_annotated_image: true
     annotated_image_topic: "/recognized_faces/image"
+
+# Enrollment node uses the same model and DB path.
+# Previously missing — enrollment_node was silently falling back to hardcoded defaults.
+face_enrollment_node:
+  ros__parameters:
+    image_topic: "/depth_cam/rgb/image_raw"
+    image_encoding: "bgr8"
+    model_name: "buffalo_s"
+    det_size: 640
+    gpu_id: 0
+    faces_db_path: "/home/ubuntu/ros2_ws/src/jetauto-ros2/data/faces"

@@ -53,7 +53,7 @@ class EnrollmentNode(Node):
             'faces_db_path',
             '/home/ubuntu/ros2_ws/src/jetauto-ros2/data/faces',
         )
-        self.declare_parameter('model_name', 'buffalo_l')
+        self.declare_parameter('model_name', 'buffalo_s')
         self.declare_parameter('det_size', 640)
         self.declare_parameter('gpu_id', 0)
         self.declare_parameter('num_captures', 5)
