@@ -260,14 +260,15 @@ class EnrollmentNode(Node):
         was = self._face_visible
         self._face_visible = face_now
 
-        if face_now and not was:
-            # Face just appeared
+        if face_now and (not was or self._face_stable_since is None):
+            # Face just appeared, or timer was cleared after a capture — restart it
             self._face_stable_since = time.time()
             self._publish_status('Face detected! Hold still...')
         elif not face_now and was:
             # Face disappeared
             self._face_stable_since = None
             self._publish_status("Move closer — I can't see your face.")
+            self._speak("Move closer, I can't see your face.")
         else:
             # Periodic status push so browser stays current
             self._publish_status()
@@ -283,7 +284,8 @@ class EnrollmentNode(Node):
 
     def _capture(self, face):
         """Record one face embedding and prompt for the next pose."""
-        self._face_stable_since = None  # reset timer before next capture
+        self._face_stable_since = None  # reset timer — restarted on next tick
+        self._face_visible = False      # force re-detection so timer restarts even if face stays in frame
         self._captures.append(face.embedding.copy())
         n = len(self._captures)
         total = self.get_parameter('num_captures').value
