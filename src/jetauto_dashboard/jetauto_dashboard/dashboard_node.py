@@ -95,6 +95,14 @@ class DashboardNode(Node):
             durability=DurabilityPolicy.VOLATILE,
             depth=1,
         )
+        # TRANSIENT_LOCAL: matches enrollment_node's pub_status publisher so
+        # the dashboard never misses an early error/status publish before
+        # ROS discovery fully completes.
+        qos_transient = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            depth=1,
+        )
 
         # -- Subscribers --
         # Battery: raw millivolts (UInt16) from the robot controller
@@ -136,9 +144,9 @@ class DashboardNode(Node):
                 DetectedObjectArray, '/detected_objects',
                 self._on_detections, qos_best_effort)
 
-        # Face enrollment status
+        # Face enrollment status — TRANSIENT_LOCAL matches enrollment_node publisher
         self.create_subscription(
-            String, '/faces/enroll/status', self._on_enrollment_status, qos_reliable)
+            String, '/faces/enroll/status', self._on_enrollment_status, qos_transient)
 
         # Recognized faces (optional — for detection log overlay)
         if HAS_FACE_MSGS:

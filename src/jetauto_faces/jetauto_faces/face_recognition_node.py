@@ -39,7 +39,7 @@ class FaceRecognitionNode(LifecycleNode):
         self.declare_parameter('image_topic', '/depth_cam/rgb/image_raw')
         self.declare_parameter('image_encoding', 'bgr8')
         self.declare_parameter('detection_topic', '/detected_objects')
-        self.declare_parameter('model_name', 'buffalo_s')
+        self.declare_parameter('model_name', 'buffalo_l')
         self.declare_parameter('det_size', 640)
         self.declare_parameter('gpu_id', 0)
         self.declare_parameter('faces_db_path', '')

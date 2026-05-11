@@ -26,6 +26,7 @@ import time
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 import numpy as _np  # used for manual ROS→OpenCV image conversion (no cv_bridge needed)
@@ -53,7 +54,7 @@ class EnrollmentNode(Node):
             'faces_db_path',
             '/home/ubuntu/ros2_ws/src/jetauto-ros2/data/faces',
         )
-        self.declare_parameter('model_name', 'buffalo_s')
+        self.declare_parameter('model_name', 'buffalo_l')
         self.declare_parameter('det_size', 640)
         self.declare_parameter('gpu_id', 0)
         self.declare_parameter('num_captures', 5)
@@ -76,7 +77,15 @@ class EnrollmentNode(Node):
         self._latest_frame = None
 
         # -- Publishers --
-        self.pub_status = self.create_publisher(String, '/faces/enroll/status', 10)
+        # TRANSIENT_LOCAL: keeps last status so late-joining subscribers
+        # (e.g. dashboard reconnects, or error fires before discovery completes)
+        # always receive the most recent state.
+        _qos_status = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            depth=1,
+        )
+        self.pub_status = self.create_publisher(String, '/faces/enroll/status', _qos_status)
         self.pub_tts = self.create_publisher(
             String, self.get_parameter('tts_topic').value, 1)
         self.pub_reload = self.create_publisher(String, '/faces/reload', 1)
