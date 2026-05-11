@@ -13,8 +13,10 @@ face_recognition_node:
     # buffalo_s: good accuracy, ~80MB ONNX — fast load, recommended for Jetson
     # buffalo_sc: detection only, ~20MB — no face recognition/embedding
     model_name: "buffalo_l"
-    # Detection size — larger = more accurate face detection but slower
-    det_size: 640
+    # Detection size — larger = more accurate but slower. 320 is recommended
+    # for CPU-only inference (GPU not available on this system via ONNX Runtime).
+    # 640 → ~3s per frame on CPU; 320 → ~0.8s per frame on CPU.
+    det_size: 320
     # GPU device id (-1 for CPU)
     gpu_id: 0
 
@@ -54,6 +56,6 @@ face_enrollment_node:
     image_topic: "/depth_cam/rgb/image_raw"
     image_encoding: "bgr8"
     model_name: "buffalo_l"
-    det_size: 640
+    det_size: 320
     gpu_id: 0
     faces_db_path: "/home/ubuntu/ros2_ws/src/jetauto-ros2/data/faces"
