@@ -1036,6 +1036,21 @@ def main(args=None):
     ros_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     ros_thread.start()
 
+    # Ensure subprocesses are killed when systemd stops the service (SIGTERM)
+    # or the terminal closes (SIGHUP). Without this, setsid children survive.
+    def _shutdown_handler(signum, frame):
+        node.get_logger().info(f'Signal {signum} received — cleaning up subprocesses')
+        node.cleanup_subprocesses()
+        try:
+            node.destroy_node()
+            rclpy.shutdown()
+        except Exception:
+            pass
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown_handler)
+    signal.signal(signal.SIGHUP, _shutdown_handler)
+
     node.get_logger().info(f'Dashboard serving on http://{host}:{port}')
 
     try:
