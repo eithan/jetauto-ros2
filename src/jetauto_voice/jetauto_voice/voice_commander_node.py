@@ -2,25 +2,24 @@
 """
 Voice Commander Node — fully offline, open-source voice pipeline.
 
-Flow::
+One-shot model::
 
     mic audio  →  openWakeWord (continuous, 80ms chunks)
                       │ wake word detected
                       ▼
-               greeting TTS → beep → continuous listen session
+               "Yes?" TTS → drain (800ms) → capture ONE utterance
                       │
-              ┌───────┴───── VAD captures utterance ─────┐
-              │              faster-whisper STT           │
-              │              intent_mapper                │
-              │                                           │
-              │  find X / start vision → execute, END     │
-              │  stop/disable vision   → execute, LISTEN  │
-              │  Jarvis stop           → END              │
-              │  unmatched / noise     → LISTEN           │
-              └───────────────────────────────────────────┘
+                      ├── silence / too quiet  →  return silently
+                      ├── hallucination        →  return silently
+                      ├── stop command         →  "Okay." → return
+                      ├── matched command      →  execute  → return
+                      └── plausible + no match →  hint TTS → return
+                      │
+                      ▼
+               back to openWakeWord (passive)
 
-"END" = return to passive wake word listening.
-"LISTEN" = keep the session open and capture next utterance.
+Echo-proof: TTS responses play *after* we've already returned to OWW
+mode, so Whisper is never running when Jarvis is speaking.
 """
 
 import os
@@ -47,6 +46,7 @@ from jetauto_voice.intent_mapper import (
     is_what_do_you_see_command,
     is_describe_scene_command,
     is_who_do_you_see_command,
+    is_help_command,
     _HALLUCINATIONS,
     _PLAUSIBLE_WORDS,
 )
@@ -214,25 +214,37 @@ class VoiceCommanderNode(Node):
         os.environ.pop("TRANSFORMERS_OFFLINE", None)
 
         try:
-            self._stt_model = WhisperModel(
-                self._stt_model_size,
-                device=self._stt_device,
-                compute_type=self._stt_compute_type,
-            )
-            self.get_logger().info(
-                f"faster-whisper: {self._stt_model_size} "
-                f"on {self._stt_device}/{self._stt_compute_type}"
-            )
-        except Exception as e:
-            self.get_logger().warn(f"STT on {self._stt_device} failed ({e}) — trying CPU")
-            try:
+            # Try CUDA with progressively more-compatible compute types.
+            # Jetson Orin: int8_float16 works best; float16 and int8 are fallbacks.
+            _cuda_types = ["int8_float16", "float16", "int8"]
+            for ct in _cuda_types:
+                try:
+                    self._stt_model = WhisperModel(
+                        self._stt_model_size, device="cuda", compute_type=ct,
+                    )
+                    self._stt_actual_device = "cuda"
+                    self.get_logger().info(
+                        f"faster-whisper: {self._stt_model_size} on cuda/{ct}"
+                    )
+                    break
+                except Exception as e:
+                    self.get_logger().debug(f"cuda/{ct} failed: {e}")
+                    self._stt_model = None
+
+            if self._stt_model is None:
+                # All CUDA attempts failed — fall back to CPU
+                self.get_logger().warn(
+                    "All CUDA compute types failed — falling back to CPU/int8"
+                )
                 self._stt_model = WhisperModel(
                     self._stt_model_size, device="cpu", compute_type="int8",
                 )
                 self._stt_actual_device = "cpu"
-                self.get_logger().info(f"faster-whisper CPU fallback: {self._stt_model_size}/int8")
-            except Exception as e2:
-                self.get_logger().error(f"STT CPU fallback failed: {e2}")
+                self.get_logger().info(
+                    f"faster-whisper CPU fallback: {self._stt_model_size}/int8"
+                )
+        except Exception as e2:
+            self.get_logger().error(f"STT init failed entirely: {e2}")
         finally:
             if saved is not None:
                 os.environ["HF_HUB_OFFLINE"] = saved
@@ -320,83 +332,75 @@ class VoiceCommanderNode(Node):
     # ================================================================== #
 
     def _run_session(self, stream) -> None:
-        """Run a voice command session.
+        """One-shot voice command session.
 
-        1. Greeting TTS → wait → drain → beep
-        2. Continuous VAD listen loop:
-           - noise/empty/hallucination → silently loop (zero overhead)
-           - matched command → execute → if detection-on, END; else drain+beep+loop
-           - "Jarvis stop" → END
-           - 5-min timeout → END
+        Captures exactly ONE utterance after the wake word, dispatches it,
+        then returns immediately.  TTS responses play after we've returned
+        to OWW mode, so Whisper is never running while Jarvis speaks.
         """
-        # --- Greeting ---
+        # --- Greeting: "Yes?" then drain its echo from the mic ---
         self._pub_voice_state('speaking')
         self._speak_and_wait("Yes?")
-        self._drain_stream(stream, 500)   # absorb echo/reverb, no beep
+        self._drain_stream(stream, 800)   # absorb reverb; longer = safer echo margin
         self._pub_voice_state('listening')
-        self.get_logger().info("Session open — listening for commands")
+        self.get_logger().info("Listening for command (one-shot)")
 
-        t0 = time.time()
+        # --- Capture ONE utterance ---
+        audio = self._capture_speech(stream)
 
-        while not self._shutdown_event.is_set():
-            # Session clock
-            if time.time() - t0 > self._session_timeout_sec:
-                self.get_logger().info("Session timeout — returning to wake word")
-                break
+        if audio is None:
+            # No speech detected within the timeout — return silently.
+            # The user simply needs to say the wake word again.
+            self.get_logger().info("No speech detected — returning to wake word")
+            self._pub_voice_state('idle')
+            return
 
-            # --- Capture speech ---
-            audio = self._capture_speech(stream)
-            if audio is None:
-                # Silence timeout — no speech for vad_listen_timeout_sec
-                # Just loop — session stays open until 5-min timeout
-                continue
+        # Energy gate — VAD occasionally fires on fan noise that passes frame
+        # threshold but has negligible energy. Typical speech RMS is 0.02–0.15.
+        rms = float(np.sqrt(np.mean(audio ** 2)))
+        if rms < 0.008:
+            self.get_logger().debug(f'Audio too quiet (RMS={rms:.4f}) — skipping')
+            self._pub_voice_state('idle')
+            return
 
-            # Reject very quiet audio — VAD occasionally latches onto fan noise
-            # or TTS echo that passes the frame threshold but has negligible energy.
-            # Typical speech RMS is 0.02–0.15 on a normalised [-1, 1] signal.
-            rms = float(np.sqrt(np.mean(audio ** 2)))
-            if rms < 0.008:
-                self.get_logger().debug(f'Audio too quiet (RMS={rms:.4f}) — skipping')
-                self._pub_voice_state('listening')
-                continue
+        # --- Transcribe ---
+        self._pub_voice_state('processing')
+        text = self._partial_text or self._transcribe(audio)
+        self._partial_text = None
 
-            # --- Transcribe (may already be done if early-exit fired) ---
-            self._pub_voice_state('processing')
-            text = self._partial_text or self._transcribe(audio)
-            self._partial_text = None
-            if not text:
-                self._pub_voice_state('listening')
-                continue
-            if text.lower().strip().rstrip("?.!,") in _HALLUCINATIONS:
-                self._pub_voice_state('listening')
-                continue
+        # Empty or known hallucination — drop silently
+        if not text or text.lower().strip().rstrip("?.!,") in _HALLUCINATIONS:
+            self.get_logger().info(f'Empty/hallucination — skipping: "{text}"')
+            self._pub_voice_state('idle')
+            return
 
-            # Plausibility gate — reject transcriptions that contain zero words
-            # from the command vocabulary.  Catches fluent hallucinations like
-            # "That was fun" or "I love this" before intent matching.
-            if not self._is_plausible_command(text):
-                self.get_logger().info(f'Implausible transcription (skipping): "{text}"')
-                self._pub_voice_state('listening')
-                continue
+        # Plausibility gate — rejects "That was fun", "I love this", etc.
+        if not self._is_plausible_command(text):
+            self.get_logger().info(f'Implausible transcription — skipping: "{text}"')
+            self._pub_voice_state('idle')
+            return
 
-            self.get_logger().info(f'Heard: "{text}"')
+        self.get_logger().info(f'Heard: "{text}"')
 
-            # --- Jarvis stop ---
-            if self._is_stop_command(text):
-                self.get_logger().info("Jarvis stop — ending session")
-                self._pub_voice_state('speaking')
-                self._speak_and_wait("Okay.")
-                break
+        # --- Stop command ---
+        if self._is_stop_command(text):
+            self.get_logger().info("Stop command — returning to wake word")
+            self._pub_voice_state('speaking')
+            self._speak_and_wait("Okay.")
+            self._pub_voice_state('idle')
+            return
 
-            # --- Dispatch intent ---
-            end_session = self._dispatch_intent(text)
-            if end_session:
-                self.get_logger().info("Session ending after command")
-                break
+        # --- Dispatch intent ---
+        matched = self._dispatch_intent(text)
 
-            # Command executed — drain TTS echo then go back to listening
-            self._drain_stream(stream, 300)
-            self._pub_voice_state('listening')
+        if not matched:
+            # Plausible utterance but no intent matched — give a hint
+            self.get_logger().info(f'No intent matched for: "{text}"')
+            self._pub_voice_state('speaking')
+            self._speak_and_wait(
+                "I didn't understand. Try: find the bottle, "
+                "what do you see, who do you see, start detection, or help."
+            )
 
         self._pub_voice_state('idle')
 
@@ -607,9 +611,10 @@ class VoiceCommanderNode(Node):
             or is_describe_scene_command(text)
             or is_enable_command(text)
             or is_disable_command(text)
+            or is_help_command(text)
             or self._is_stop_command(text)
             or self._is_disable_voice_command(text)
-            or self._is_reacknowledge_command(text)
+            or extract_target(text) is not None
         )
 
     def _on_scene_caption(self, msg: String) -> None:
@@ -653,25 +658,31 @@ class VoiceCommanderNode(Node):
             "jarvis quit", "jarvis done", "jarvis bye",
         ])
 
-    def _is_reacknowledge_command(self, text: str) -> bool:
-        """True if the user is re-invoking Jarvis during an open session."""
-        import re
-        t = re.sub(r'[^\w\s]', '', text.lower().strip())
-        return t in {
-            'hey jarvis', 'jarvis', 'ok jarvis', 'okay jarvis', 'hi jarvis',
-        }
-
     def _dispatch_intent(self, text: str) -> bool:
-        """Execute a voice command. Returns True if session should end."""
+        """Execute a voice command. Returns True if a command was matched, False otherwise.
 
-        # -1. Re-acknowledgment: user said "hey Jarvis" again during a session
-        if self._is_reacknowledge_command(text):
-            self.get_logger().info('Re-acknowledgment during session — responding Yes?')
+        In the one-shot model there is no concept of "stay in session" —
+        we always return to wake-word mode after this call.  The return
+        value is used only to decide whether to play an "I didn't understand"
+        hint in _run_session.
+        """
+
+        # 0. Help / commands list
+        if is_help_command(text):
+            self.get_logger().info('Help command')
             self._pub_voice_state('speaking')
-            self._speak_and_wait("Yes?")
-            return False  # stay in session
+            self._speak_and_wait(
+                "Here are some things you can say: "
+                "find the bottle, or find the person, to search for an object. "
+                "What do you see, for a quick object list. "
+                "Who do you see, to recognize faces. "
+                "Start detection, or stop detection, to control vision. "
+                "Describe, for a detailed scene description. "
+                "Say hey Jarvis before each command."
+            )
+            return True
 
-        # 0a-face. "Who do you see?" → face recognition results
+        # 1. "Who do you see?" → face recognition results
         if is_who_do_you_see_command(text):
             names = list(dict.fromkeys(self._last_recognized_names))  # deduplicate, preserve order
             if names:
@@ -686,9 +697,9 @@ class VoiceCommanderNode(Node):
             self.get_logger().info(f'Who do you see → "{reply}"')
             self._pub_voice_state('speaking')
             self._speak_and_wait(reply)
-            return False  # stay in session
+            return True
 
-        # 0b. "What do you see?" → YOLO object list (fast, always fresh)
+        # 2. "What do you see?" → YOLO object list (fast, always fresh)
         if is_what_do_you_see_command(text):
             if self._last_yolo_description:
                 self.get_logger().info(f'YOLO summary → "{self._last_yolo_description}"')
@@ -698,9 +709,9 @@ class VoiceCommanderNode(Node):
                 self.get_logger().info('YOLO summary → nothing detected')
                 self._pub_voice_state('speaking')
                 self._speak_and_wait("I don't see anything right now. Make sure vision is enabled.")
-            return False  # stay in session
+            return True
 
-        # 0c. "Give me more detail" → trigger fresh Florence-2 inference, then speak
+        # 3. "Describe" → trigger fresh Florence-2 inference, then speak
         if is_describe_scene_command(text):
             self.get_logger().info('Florence-2 on-demand triggered')
             prev_caption = self._last_caption
@@ -708,8 +719,7 @@ class VoiceCommanderNode(Node):
             trigger_msg.data = 'now'
             self._caption_trigger_pub.publish(trigger_msg)
             self._pub_voice_state('processing')
-            # If no caption yet, Florence-2 probably isn't loaded — tell the user
-            # it's starting up (takes ~15s) so they don't think it's broken.
+            # If no caption yet, Florence-2 probably isn't loaded — warn the user
             if not self._last_caption:
                 self._pub_voice_state('speaking')
                 self._speak_and_wait("Loading scene describer. One moment.")
@@ -728,18 +738,18 @@ class VoiceCommanderNode(Node):
             else:
                 self._pub_voice_state('speaking')
                 self._speak_and_wait("Scene description isn't available. Make sure vision is enabled.")
-            return False  # stay in session
+            return True
 
-        # 1. Find object → announce only, no action (vision must be enabled separately)
+        # 4. Find object
         result = extract_target(text)
         if result is not None:
             yolo_label, raw_object = result
-            self.get_logger().info(f'Find intent (announce only): "{raw_object}"')
+            self.get_logger().info(f'Find intent: "{raw_object}" ({yolo_label})')
             self._pub_voice_state('speaking')
-            self._speak_and_wait(f"I'll look for {raw_object} when detection is enabled.")
-            return False   # stay in session
+            self._speak_and_wait(f"Looking for {raw_object}. Make sure detection is enabled.")
+            return True
 
-        # 2. Enable detection → end session
+        # 5. Enable detection
         if is_enable_command(text):
             self.get_logger().info("Enable detection")
             self._pub_enable(True)
@@ -747,23 +757,22 @@ class VoiceCommanderNode(Node):
             self._speak_and_wait("Detection enabled.")
             return True
 
-        # 3. Disable detection → stay in session
+        # 6. Disable detection
         if is_disable_command(text):
             self.get_logger().info("Disable detection")
             self._pub_enable(False)
             self._pub_voice_state('speaking')
             self._speak_and_wait("Detection disabled.")
-            return False
+            return True
 
-        # 4. Disable voice → end session
+        # 7. Disable voice
         if self._is_disable_voice_command(text):
-            self.get_logger().info("Disable voice — ending session")
+            self.get_logger().info("Disable voice")
             self._pub_voice_state('speaking')
             self._speak_and_wait("Voice disabled.")
             return True
 
-        # 5. Unmatched — silently ignore, keep listening
-        self.get_logger().info(f'No intent for: "{text}"')
+        # Unmatched
         return False
 
     def _pub_voice_state(self, state: str) -> None:

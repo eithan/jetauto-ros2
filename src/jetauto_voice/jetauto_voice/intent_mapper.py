@@ -413,14 +413,38 @@ def is_who_do_you_see_command(text: str) -> bool:
             "who can you see",
             "who's there",
             "who is there",
+            "whose there",
             "who are you looking at",
+            "who are you seeing",
             "who do you recognize",
             "who is that",
+            "who it is",
+            "who is it",
             "who am i",
             "do you know me",
             "do you recognize me",
             "who's in front",
             "who is in front",
+            "who is in",
+        ]
+    )
+
+
+def is_help_command(text: str) -> bool:
+    """Return True if the user is asking for a list of available commands."""
+    t = text.lower().strip().rstrip("?.!,")
+    return any(
+        phrase in t
+        for phrase in [
+            "help",
+            "what can you do",
+            "list commands",
+            "what commands",
+            "show commands",
+            "available commands",
+            "how do i use you",
+            "what do you know",
+            "what are your commands",
         ]
     )
 

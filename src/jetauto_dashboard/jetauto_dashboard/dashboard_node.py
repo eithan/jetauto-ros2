@@ -552,7 +552,7 @@ class DashboardNode(Node):
             self._voice_proc = subprocess.Popen(
                 ['ros2', 'launch', 'jetauto_voice', 'voice_control.launch.py',
                  'mic_device_index:=1', 'vad_aggressiveness:=2',
-                 'stt_model_size:=tiny.en'],
+                 'stt_model_size:=base.en'],
                 preexec_fn=os.setsid,
             )
             self.get_logger().info(f'Voice commander launched (pid {self._voice_proc.pid})')
