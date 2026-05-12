@@ -26,6 +26,7 @@ Flow::
 import os
 import time
 import threading
+import concurrent.futures
 from typing import Optional
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -297,7 +298,10 @@ class VoiceCommanderNode(Node):
 
                 if score >= self._wake_word_threshold:
                     self.get_logger().info(f"Wake word (score={score:.3f})")
-                    self._run_session(stream)
+                    try:
+                        self._run_session(stream)
+                    except Exception as e:
+                        self.get_logger().error(f"Session error (recovering): {e}")
                     cooldown = cooldown_total
                     dbg_count = 0
                     dbg_peak = 0.0
@@ -489,15 +493,25 @@ class VoiceCommanderNode(Node):
         wait = max(1.5, len(text.split()) / _TTS_WPS + _TTS_OVERHEAD)
         time.sleep(wait)
 
-    def _transcribe(self, audio: np.ndarray) -> str:
+    def _transcribe(self, audio: np.ndarray, timeout: float = 20.0) -> str:
+        """Transcribe audio with a hard timeout so a slow Whisper never hangs the loop."""
         if self._stt_model is None:
             self.get_logger().error("STT not loaded")
             return ""
-        try:
+
+        def _run():
             segs, _ = self._stt_model.transcribe(
                 audio, language="en", beam_size=1, vad_filter=True,
             )
             return " ".join(s.text for s in segs).strip()
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(_run)
+                return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            self.get_logger().warn(f"STT timed out after {timeout}s — skipping utterance")
+            return ""
         except Exception as e:
             self.get_logger().error(f"STT error: {e}")
             return ""

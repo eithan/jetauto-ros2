@@ -30,7 +30,7 @@ face_recognition_node:
 
     # --- Performance ---
     # Minimum seconds between face recognition attempts
-    recognition_interval: 0.5
+    recognition_interval: 2.0
     # Only process the N closest/largest person detections per frame
     max_persons_per_frame: 5
 
