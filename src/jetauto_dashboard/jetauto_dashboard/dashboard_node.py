@@ -80,6 +80,7 @@ class DashboardNode(Node):
             'explore_announce': True,   # TTS announcements for explore events (on by default)
             'face_enabled': False,
             'face_loading': False,      # True while buffalo_l model is loading
+            'face_detections': [],      # recognized face names — separate from YOLO objects
             'enrollment_active': False,
             'enrollment_status': None,  # latest JSON payload from enrollment_node
         }
@@ -376,15 +377,13 @@ class DashboardNode(Node):
         self._emit_state()
 
     def _on_recognized_faces(self, msg):
-        """Overlay recognized face names in the detection log."""
-        if not msg.faces:
-            return
+        """Track recognized faces in state['face_detections'] — separate from YOLO objects.
 
+        Intentionally does NOT write to state['detections'] so that object
+        detections and face recognitions never clobber each other in the UI.
+        """
         ts = datetime.now().strftime('%H:%M:%S')
-        # Merge known faces into the detections list (prepend with 👤 label)
-        known = [f for f in msg.faces if f.name != 'unknown']
-        if not known:
-            return
+        known = [f for f in msg.faces if f.name != 'unknown'] if msg.faces else []
 
         entries = []
         seen = set()
@@ -392,16 +391,15 @@ class DashboardNode(Node):
             if f.name not in seen:
                 seen.add(f.name)
                 entries.append({
-                    'label': f'👤 {f.name}',
+                    'name': f.name,
                     'confidence': round(f.confidence, 2),
                     'time': ts,
                 })
 
-        new_labels = frozenset(e['label'] for e in entries)
-        old_labels = getattr(self, '_last_face_labels', frozenset())
-        if new_labels != old_labels:
-            self._last_face_labels = new_labels
-            self.state['detections'] = entries[:5]
+        new_names = frozenset(e['name'] for e in entries)
+        old_names = frozenset(e['name'] for e in self.state.get('face_detections', []))
+        if new_names != old_names:
+            self.state['face_detections'] = entries
             self._emit_state()
 
     def _on_startup(self):
@@ -740,11 +738,13 @@ class DashboardNode(Node):
         self._emit_state()
 
         if enabled:
-            self._launch_tts()    # TTS needed for voice feedback ("Yes?", etc.)
+            self._launch_tts()       # TTS needed for voice feedback ("Yes?", etc.)
+            self._launch_detector()  # YOLO needed for "what do you see?" commands
             self._launch_voice()
         else:
             self._kill_voice()
-            self._maybe_kill_tts()  # only kill TTS if vision also off
+            self._maybe_kill_detector()  # only kill if vision/face also off
+            self._maybe_kill_tts()       # only kill TTS if vision/face also off
 
         self.get_logger().info(f'Voice {"enabled" if enabled else "disabled"}')
 
@@ -831,10 +831,12 @@ class DashboardNode(Node):
         if enabled:
             self._launch_tts()       # needed for greeting announcements
             self._launch_detector()  # face node needs YOLO person detections
+                                     # (no-op if already running from voice startup)
             self._launch_face()
             threading.Thread(target=self._announce_face_enabled, daemon=True).start()
         else:
             self.state['face_loading'] = False
+            self.state['face_detections'] = []   # clear stale face names from UI
             self._kill_face()
             self._maybe_kill_detector()
             self._maybe_kill_tts()

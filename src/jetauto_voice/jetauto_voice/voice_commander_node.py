@@ -105,6 +105,8 @@ class VoiceCommanderNode(Node):
         self._target_pub = self.create_publisher(String, "/jetauto/detection/target", 1)
         self._tts_pub = self.create_publisher(String, "/tts/speak", 1)
         self._caption_trigger_pub = self.create_publisher(String, "/scene_caption/trigger", 1)
+        # Signals detector_node to pause YOLO inference while Whisper is running
+        self._stt_busy_pub = self.create_publisher(Bool, "/jetauto/stt_busy", 1)
         # TRANSIENT_LOCAL matches the dashboard subscriber — ensures the first
         # state publish is never lost due to DDS discovery timing.
         _qos_latched = QoSProfile(
@@ -492,9 +494,17 @@ class VoiceCommanderNode(Node):
         wait = max(1.5, len(text.split()) / _TTS_WPS + _TTS_OVERHEAD)
         time.sleep(wait)
 
+    def _set_stt_busy(self, busy: bool) -> None:
+        """Publish /jetauto/stt_busy so detector_node pauses YOLO during transcription."""
+        msg = Bool()
+        msg.data = busy
+        self._stt_busy_pub.publish(msg)
+
     def _transcribe(self, audio: np.ndarray, timeout: float = 20.0) -> str:
         """Transcribe audio with a hard timeout so a slow Whisper never hangs the loop.
 
+        Publishes /jetauto/stt_busy=True for the full duration so YOLO inference
+        is paused, yielding GPU/CPU resources to Whisper.
         Uses a daemon thread so join(timeout) actually returns even if Whisper is
         still running — unlike ThreadPoolExecutor whose __exit__ blocks until done.
         """
@@ -528,19 +538,23 @@ class VoiceCommanderNode(Node):
             except Exception as e:
                 error_holder[0] = e
 
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
-        t.join(timeout=timeout)
+        self._set_stt_busy(True)
+        try:
+            t = threading.Thread(target=_run, daemon=True)
+            t.start()
+            t.join(timeout=timeout)
 
-        if t.is_alive():
-            self.get_logger().warn(f"STT timed out after {timeout}s — skipping utterance")
-            return ""
+            if t.is_alive():
+                self.get_logger().warn(f"STT timed out after {timeout}s — skipping utterance")
+                return ""
 
-        if error_holder[0] is not None:
-            self.get_logger().error(f"STT error: {error_holder[0]}")
-            return ""
+            if error_holder[0] is not None:
+                self.get_logger().error(f"STT error: {error_holder[0]}")
+                return ""
 
-        return result_holder[0] or ""
+            return result_holder[0] or ""
+        finally:
+            self._set_stt_busy(False)
 
     # ================================================================== #
     # Intent dispatch

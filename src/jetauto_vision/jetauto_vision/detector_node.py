@@ -54,6 +54,13 @@ class DetectorNode(LifecycleNode):
         self.enabled = self.get_parameter('start_enabled').value
         self.create_subscription(Bool, '/jetauto/detection/enable', self._enable_callback, 1)
 
+        # -- STT busy flag --
+        # When the voice commander is running Whisper transcription it publishes
+        # True on /jetauto/stt_busy. We skip YOLO inference during that window
+        # so the two workloads don't compete for GPU/CPU at the same time.
+        self.stt_busy = False
+        self.create_subscription(Bool, '/jetauto/stt_busy', self._stt_busy_callback, 1)
+
         self.get_logger().info('DetectorNode created (inactive — waiting for configure)')
 
     def _enable_callback(self, msg: Bool):
@@ -61,6 +68,10 @@ class DetectorNode(LifecycleNode):
         self.enabled = msg.data
         state = 'ENABLED' if self.enabled else 'DISABLED'
         self.get_logger().info(f'Detection {state} via /jetauto/detection/enable')
+
+    def _stt_busy_callback(self, msg: Bool):
+        """Pause/resume inference while Whisper is transcribing."""
+        self.stt_busy = msg.data
 
     # ------------------------------------------------------------------ #
     # Lifecycle callbacks
@@ -167,6 +178,10 @@ class DetectorNode(LifecycleNode):
     def _image_callback(self, msg: Image):
         """Process incoming camera frames at the configured interval."""
         if not self.enabled:
+            return
+
+        # Yield GPU/CPU to Whisper while it is transcribing
+        if self.stt_busy:
             return
 
         now = time.time()
