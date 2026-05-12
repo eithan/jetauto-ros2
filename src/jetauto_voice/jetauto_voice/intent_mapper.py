@@ -162,6 +162,24 @@ _PREFIX_RE = re.compile(
 )
 
 # ---------------------------------------------------------------------------
+# Plausibility vocabulary
+# ---------------------------------------------------------------------------
+# A transcription must contain at least one of these words to be treated as a
+# real command. Catches fluent-but-irrelevant Whisper hallucinations like
+# "That was fun", "I love this", "Open. Open. Open." that pass the exact-phrase
+# filter below but clearly aren't robot commands.
+# ---------------------------------------------------------------------------
+_PLAUSIBLE_WORDS: frozenset = frozenset({
+    'jarvis',
+    'find', 'locate', 'search', 'where',
+    'see', 'seeing', 'look',
+    'start', 'stop', 'enable', 'disable',
+    'vision', 'detection',
+    'describe', 'detail', 'elaborate',
+    'recognize', 'know', 'who', 'what',
+})
+
+# ---------------------------------------------------------------------------
 # Known Whisper hallucination phrases to reject outright
 # ---------------------------------------------------------------------------
 # Whisper commonly outputs these on near-silent audio; they produce false intents.

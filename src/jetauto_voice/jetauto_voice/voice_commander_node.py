@@ -48,6 +48,7 @@ from jetauto_voice.intent_mapper import (
     is_describe_scene_command,
     is_who_do_you_see_command,
     _HALLUCINATIONS,
+    _PLAUSIBLE_WORDS,
 )
 
 _OWW_CHUNK_SAMPLES = 1280   # 80 ms @ 16 kHz
@@ -266,6 +267,13 @@ class VoiceCommanderNode(Node):
         time.sleep(0.1)
         self._pub_voice_state('idle')
 
+        # Announce readiness — TTS node is started before voice node so by the
+        # time OWW + Whisper finish loading it should be fully subscribed.
+        time.sleep(1.5)
+        _m = String()
+        _m.data = "I'm ready."
+        self._tts_pub.publish(_m)
+
         with sd.InputStream(
             samplerate=self._sample_rate, channels=1, dtype="int16",
             blocksize=_OWW_CHUNK_SAMPLES, device=device,
@@ -343,6 +351,15 @@ class VoiceCommanderNode(Node):
                 # Just loop — session stays open until 5-min timeout
                 continue
 
+            # Reject very quiet audio — VAD occasionally latches onto fan noise
+            # or TTS echo that passes the frame threshold but has negligible energy.
+            # Typical speech RMS is 0.02–0.15 on a normalised [-1, 1] signal.
+            rms = float(np.sqrt(np.mean(audio ** 2)))
+            if rms < 0.008:
+                self.get_logger().debug(f'Audio too quiet (RMS={rms:.4f}) — skipping')
+                self._pub_voice_state('listening')
+                continue
+
             # --- Transcribe (may already be done if early-exit fired) ---
             self._pub_voice_state('processing')
             text = self._partial_text or self._transcribe(audio)
@@ -351,6 +368,14 @@ class VoiceCommanderNode(Node):
                 self._pub_voice_state('listening')
                 continue
             if text.lower().strip().rstrip("?.!,") in _HALLUCINATIONS:
+                self._pub_voice_state('listening')
+                continue
+
+            # Plausibility gate — reject transcriptions that contain zero words
+            # from the command vocabulary.  Catches fluent hallucinations like
+            # "That was fun" or "I love this" before intent matching.
+            if not self._is_plausible_command(text):
+                self.get_logger().info(f'Implausible transcription (skipping): "{text}"')
                 self._pub_voice_state('listening')
                 continue
 
@@ -494,6 +519,12 @@ class VoiceCommanderNode(Node):
         wait = max(1.5, len(text.split()) / _TTS_WPS + _TTS_OVERHEAD)
         time.sleep(wait)
 
+    def _is_plausible_command(self, text: str) -> bool:
+        """Return True if text contains at least one word from the command vocabulary."""
+        import re as _re
+        words = set(_re.sub(r'[^\w\s]', '', text.lower()).split())
+        return bool(words & _PLAUSIBLE_WORDS)
+
     def _set_stt_busy(self, busy: bool) -> None:
         """Publish /jetauto/stt_busy so detector_node pauses YOLO during transcription."""
         msg = Bool()
@@ -540,9 +571,11 @@ class VoiceCommanderNode(Node):
 
         self._set_stt_busy(True)
         try:
+            t_start = time.monotonic()
             t = threading.Thread(target=_run, daemon=True)
             t.start()
             t.join(timeout=timeout)
+            elapsed = time.monotonic() - t_start
 
             if t.is_alive():
                 self.get_logger().warn(f"STT timed out after {timeout}s — skipping utterance")
@@ -552,7 +585,13 @@ class VoiceCommanderNode(Node):
                 self.get_logger().error(f"STT error: {error_holder[0]}")
                 return ""
 
-            return result_holder[0] or ""
+            result = result_holder[0] or ""
+            # Log timing — < 2s = GPU, 5-15s = CPU (use this to decide model size)
+            self.get_logger().info(
+                f"STT ({self._stt_model_size}@{self._stt_actual_device}) "
+                f"{elapsed:.2f}s for {len(audio)/self._sample_rate:.1f}s audio"
+            )
+            return result
         finally:
             self._set_stt_busy(False)
 
