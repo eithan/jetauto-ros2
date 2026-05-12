@@ -26,7 +26,6 @@ Flow::
 import os
 import time
 import threading
-import concurrent.futures
 from typing import Optional
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -494,27 +493,40 @@ class VoiceCommanderNode(Node):
         time.sleep(wait)
 
     def _transcribe(self, audio: np.ndarray, timeout: float = 20.0) -> str:
-        """Transcribe audio with a hard timeout so a slow Whisper never hangs the loop."""
+        """Transcribe audio with a hard timeout so a slow Whisper never hangs the loop.
+
+        Uses a daemon thread so join(timeout) actually returns even if Whisper is
+        still running — unlike ThreadPoolExecutor whose __exit__ blocks until done.
+        """
         if self._stt_model is None:
             self.get_logger().error("STT not loaded")
             return ""
 
-        def _run():
-            segs, _ = self._stt_model.transcribe(
-                audio, language="en", beam_size=1, vad_filter=True,
-            )
-            return " ".join(s.text for s in segs).strip()
+        result_holder: list = [None]
+        error_holder:  list = [None]
 
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                future = ex.submit(_run)
-                return future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError:
+        def _run():
+            try:
+                segs, _ = self._stt_model.transcribe(
+                    audio, language="en", beam_size=1, vad_filter=True,
+                )
+                result_holder[0] = " ".join(s.text for s in segs).strip()
+            except Exception as e:
+                error_holder[0] = e
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+
+        if t.is_alive():
             self.get_logger().warn(f"STT timed out after {timeout}s — skipping utterance")
             return ""
-        except Exception as e:
-            self.get_logger().error(f"STT error: {e}")
+
+        if error_holder[0] is not None:
+            self.get_logger().error(f"STT error: {error_holder[0]}")
             return ""
+
+        return result_holder[0] or ""
 
     # ================================================================== #
     # Intent dispatch
