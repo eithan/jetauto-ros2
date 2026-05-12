@@ -278,43 +278,40 @@ html, body {
   backdrop-filter: blur(12px);
 }
 
-.toggle-group { display: flex; align-items: center; gap: 12px; }
-
-.toggle-label {
-  font-size: 15px;
-  font-weight: 500;
-  letter-spacing: 1px;
+/* ── State buttons (Voice / Vision / Face ID toggles) ── */
+.state-btn {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 12px;
+  padding: 10px 18px;
+  color: rgba(239, 68, 68, 0.85);
+  font-size: 14px; font-weight: 600; letter-spacing: 1px;
   text-transform: uppercase;
-  color: var(--text-dim);
-  transition: color 0.3s;
-}
-.toggle-group.active .toggle-label { color: var(--text); }
-
-.toggle-switch {
-  width: 52px;
-  height: 28px;
-  background: rgba(255,255,255,0.18);
-  border-radius: 14px;
   cursor: pointer;
-  position: relative;
-  overflow: hidden; /* clips knob glow to pill shape */
-  transition: background 0.3s ease, box-shadow 0.3s ease;
-  border: 1px solid rgba(255,255,255,0.25);
+  transition: all 0.25s ease;
+  display: flex; align-items: center; gap: 8px;
+  white-space: nowrap;
 }
-.toggle-switch::after {
-  content: '';
-  position: absolute;
-  top: 2px; left: 2px;
-  width: 22px; height: 22px;
-  background: var(--text-dim);
-  border-radius: 50%;
-  transition: transform 0.3s ease, background 0.3s ease, box-shadow 0.3s ease;
+.state-btn:hover {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.65);
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.15);
 }
-.toggle-switch.on { background: rgba(0,212,255,0.22); border-color: rgba(0,212,255,0.7); box-shadow: inset 0 0 8px rgba(0,212,255,0.15); }
-.toggle-switch.on::after { transform: translateX(24px); background: var(--cyan); box-shadow: 0 0 8px rgba(0,212,255,0.9); }
-.toggle-switch.mini { width: 40px; height: 22px; border-radius: 11px; }
-.toggle-switch.mini::after { width: 16px; height: 16px; top: 2px; left: 2px; }
-.toggle-switch.mini.on::after { transform: translateX(16px); }
+.state-btn.on {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.45);
+  color: rgba(34, 197, 94, 0.9);
+}
+.state-btn.on:hover {
+  background: rgba(34, 197, 94, 0.18);
+  border-color: rgba(34, 197, 94, 0.7);
+  box-shadow: 0 0 12px rgba(34, 197, 94, 0.15);
+}
+.state-btn-sm {
+  padding: 7px 12px;
+  font-size: 13px;
+  border-radius: 10px;
+}
 
 .control-sep { width: 1px; height: 28px; background: var(--border); }
 
@@ -765,17 +762,11 @@ html, body {
 
   <!-- ── Controls bar ──────────────────────────────────── -->
   <div class="controls-bar">
-    <div class="toggle-group" id="voiceGroup">
-      <span class="toggle-label">🎤 Voice</span>
-      <div class="toggle-switch" id="voiceToggle" onclick="toggleVoice()"></div>
-    </div>
+    <button class="state-btn" id="voiceToggle" onclick="toggleVoice()">🎤 Voice</button>
 
     <div class="control-sep"></div>
 
-    <div class="toggle-group" id="visionGroup">
-      <span class="toggle-label">👁 Vision</span>
-      <div class="toggle-switch" id="visionToggle" onclick="toggleVision()"></div>
-    </div>
+    <button class="state-btn" id="visionToggle" onclick="toggleVision()">👁 Vision</button>
 
     <div class="control-sep"></div>
 
@@ -783,17 +774,11 @@ html, body {
       <span>🗺</span> Explore
     </button>
 
-    <div class="toggle-group" id="announceGroup" style="display:none;">
-      <span class="toggle-label" style="font-size:12px;">🔊</span>
-      <div class="toggle-switch mini" id="announceToggle" onclick="toggleExploreAnnounce()"></div>
-    </div>
+    <button class="state-btn state-btn-sm" id="announceToggle" onclick="toggleExploreAnnounce()" style="display:none;">🔊 Announce</button>
 
     <div class="control-sep"></div>
 
-    <div class="toggle-group" id="faceGroup">
-      <span class="toggle-label">👤 Face ID</span>
-      <div class="toggle-switch" id="faceToggle" onclick="toggleFaceID()"></div>
-    </div>
+    <button class="state-btn" id="faceToggle" onclick="toggleFaceID()">👤 Face ID</button>
 
     <button class="face-btn" id="enrollBtn" onclick="openEnrollModal()">
       <span>🧑</span> Enroll
@@ -1058,10 +1043,8 @@ function updateDetections(dets) {
 }
 
 function syncToggles() {
-  document.getElementById('voiceToggle').className  = 'toggle-switch' + (voiceEnabled  ? ' on' : '');
-  document.getElementById('voiceGroup').className   = 'toggle-group'  + (voiceEnabled  ? ' active' : '');
-  document.getElementById('visionToggle').className = 'toggle-switch' + (visionEnabled ? ' on' : '');
-  document.getElementById('visionGroup').className  = 'toggle-group'  + (visionEnabled ? ' active' : '');
+  document.getElementById('voiceToggle').className  = 'state-btn' + (voiceEnabled  ? ' on' : '');
+  document.getElementById('visionToggle').className = 'state-btn' + (visionEnabled ? ' on' : '');
 }
 
 // ── Controls ──────────────────────────────────────────
@@ -1115,24 +1098,21 @@ function toggleExploreAnnounce() {
 }
 
 function syncAnnounceToggle() {
-  const toggle = document.getElementById('announceToggle');
-  const group = document.getElementById('announceGroup');
-  toggle.className = 'toggle-switch mini' + (exploreAnnounce ? ' on' : '');
-  group.className = 'toggle-group' + (exploreAnnounce ? ' active' : '');
+  document.getElementById('announceToggle').className = 'state-btn state-btn-sm' + (exploreAnnounce ? ' on' : '');
 }
 
 function syncExplorePanels() {
   const detPanel = document.getElementById('detectionPanel');
   const expPanel = document.getElementById('explorePanel');
-  const annGroup = document.getElementById('announceGroup');
+  const annToggle = document.getElementById('announceToggle');
   if (exploreRunning) {
     detPanel.style.display = 'none';
     expPanel.style.display = '';
-    annGroup.style.display = '';
+    annToggle.style.display = '';
   } else {
     detPanel.style.display = '';
     expPanel.style.display = 'none';
-    annGroup.style.display = 'none';
+    annToggle.style.display = 'none';
   }
 }
 
@@ -1295,8 +1275,7 @@ function toggleFaceID() {
 }
 
 function syncFaceToggle() {
-  document.getElementById('faceToggle').className = 'toggle-switch' + (faceEnabled ? ' on' : '');
-  document.getElementById('faceGroup').className  = 'toggle-group'  + (faceEnabled ? ' active' : '');
+  document.getElementById('faceToggle').className = 'state-btn' + (faceEnabled ? ' on' : '');
 }
 
 // ── Enrollment Modal ──────────────────────────────────
