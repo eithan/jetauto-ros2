@@ -637,13 +637,18 @@ class VoiceCommanderNode(Node):
         if is_describe_scene_command(text):
             self.get_logger().info('Florence-2 on-demand triggered')
             prev_caption = self._last_caption
-            # Trigger immediate inference
             trigger_msg = String()
             trigger_msg.data = 'now'
             self._caption_trigger_pub.publish(trigger_msg)
             self._pub_voice_state('processing')
-            # Wait up to 8s for a fresh caption
-            deadline = time.time() + 8.0
+            # If no caption yet, Florence-2 probably isn't loaded — tell the user
+            # it's starting up (takes ~15s) so they don't think it's broken.
+            if not self._last_caption:
+                self._pub_voice_state('speaking')
+                self._speak_and_wait("Loading scene describer. One moment.")
+                self._pub_voice_state('processing')
+            # Wait up to 25s — covers 15s Florence-2 startup + inference time
+            deadline = time.time() + 25.0
             while time.time() < deadline:
                 if self._last_caption != prev_caption:
                     break
@@ -655,7 +660,7 @@ class VoiceCommanderNode(Node):
                 self._speak_and_wait(caption)
             else:
                 self._pub_voice_state('speaking')
-                self._speak_and_wait("Vision isn't enabled or the camera isn't ready yet.")
+                self._speak_and_wait("Scene description isn't available. Make sure vision is enabled.")
             return False  # stay in session
 
         # 1. Find object → announce only, no action (vision must be enabled separately)

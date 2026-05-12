@@ -163,6 +163,12 @@ class DashboardNode(Node):
         self.pub_tts_cancel = self.create_publisher(Bool, '/tts/cancel', 1)
         self.pub_volume = self.create_publisher(Float32, '/tts/set_volume', 1)
         self.pub_enroll_cmd = self.create_publisher(String, '/faces/enroll/command', 1)
+        self.pub_caption_trigger = self.create_publisher(String, '/scene_caption/trigger', 1)
+
+        # Caption on-demand: launch Florence-2 only when the voice commander
+        # requests a scene description, not at vision startup.
+        self.create_subscription(
+            String, '/scene_caption/trigger', self._on_caption_trigger, qos_reliable)
 
         # -- Uptime timer --
         self.create_timer(1.0, self._tick_uptime)
@@ -278,6 +284,30 @@ class DashboardNode(Node):
     def _on_scene_caption(self, msg: String):
         """Store latest caption — spoken on demand only (via voice command)."""
         pass  # caption_node → voice_commander handles on-demand speech
+
+    def _on_caption_trigger(self, msg: String):
+        """Launch Florence-2 on demand when voice commander requests a description.
+
+        If the caption node is already running, do nothing — it will handle
+        the trigger directly. If not running, launch it and re-send the trigger
+        after startup so the caption node actually processes this request.
+        """
+        if self._proc_alive(self._caption_proc):
+            return  # already up — caption node receives the trigger directly
+        self.get_logger().info('Caption trigger received — launching Florence-2 on demand')
+        self._launch_caption()
+        trigger_copy = msg.data
+
+        def _resend():
+            # Wait for caption node to load model (~15s for Florence-2)
+            time.sleep(16)
+            if self._proc_alive(self._caption_proc):
+                m = String()
+                m.data = trigger_copy
+                self.pub_caption_trigger.publish(m)
+                self.get_logger().info('Caption trigger re-sent after on-demand startup')
+
+        threading.Thread(target=_resend, daemon=True).start()
 
     def _on_explore_event(self, msg: String):
         """Handle exploration events — push to UI and optionally announce via TTS."""
@@ -523,7 +553,8 @@ class DashboardNode(Node):
         try:
             self._voice_proc = subprocess.Popen(
                 ['ros2', 'launch', 'jetauto_voice', 'voice_control.launch.py',
-                 'mic_device_index:=1', 'vad_aggressiveness:=1'],
+                 'mic_device_index:=1', 'vad_aggressiveness:=1',
+                 'stt_model_size:=tiny.en'],
                 preexec_fn=os.setsid,
             )
             self.get_logger().info(f'Voice commander launched (pid {self._voice_proc.pid})')
@@ -730,7 +761,8 @@ class DashboardNode(Node):
         if enabled:
             self._launch_tts()       # TTS needed for announcements
             self._launch_detector()
-            self._launch_caption()   # Florence-2 runs silently; speaks on demand
+            # Caption (Florence-2) is NOT launched here — it starts on first
+            # voice command ("describe the scene") to save ~1-2 GB RAM.
             # Re-publish enable after detector has time to subscribe.
             def _re_enable():
                 time.sleep(15)
