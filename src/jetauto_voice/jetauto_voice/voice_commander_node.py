@@ -322,7 +322,7 @@ class VoiceCommanderNode(Node):
         # --- Greeting ---
         self._pub_voice_state('speaking')
         self._speak_and_wait("Yes?")
-        self._drain_stream(stream, 300)   # absorb echo/reverb, no beep
+        self._drain_stream(stream, 500)   # absorb echo/reverb, no beep
         self._pub_voice_state('listening')
         self.get_logger().info("Session open — listening for commands")
 
@@ -508,7 +508,21 @@ class VoiceCommanderNode(Node):
         def _run():
             try:
                 segs, _ = self._stt_model.transcribe(
-                    audio, language="en", beam_size=1, vad_filter=True,
+                    audio,
+                    language="en",
+                    beam_size=3,
+                    vad_filter=False,          # WebRTC VAD already cleaned the audio
+                    condition_on_previous_text=False,  # prevents hallucination loops
+                    temperature=0,             # deterministic / no random sampling
+                    initial_prompt=(
+                        "Hey Jarvis. Yes. Who do you see? Who is there? Do you recognize me? "
+                        "What do you see? What is in front? Look around. "
+                        "Give me more detail. Describe. Tell me more. "
+                        "Find the bottle. Find the person. Find the chair. "
+                        "Start vision. Start detection. Enable vision. "
+                        "Stop vision. Stop detection. Disable vision. "
+                        "Jarvis stop. Okay."
+                    ),
                 )
                 result_holder[0] = " ".join(s.text for s in segs).strip()
             except Exception as e:
