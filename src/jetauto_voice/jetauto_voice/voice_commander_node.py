@@ -46,6 +46,7 @@ from jetauto_voice.intent_mapper import (
     is_disable_command,
     is_what_do_you_see_command,
     is_describe_scene_command,
+    is_who_do_you_see_command,
     _HALLUCINATIONS,
 )
 
@@ -125,6 +126,14 @@ class VoiceCommanderNode(Node):
         except Exception:
             self.get_logger().warn('jetauto_msgs unavailable — YOLO summary disabled')
 
+        try:
+            from jetauto_msgs.msg import RecognizedFaceArray
+            self._face_sub = self.create_subscription(
+                RecognizedFaceArray, '/recognized_faces', self._on_recognized_faces, 1
+            )
+        except Exception:
+            self.get_logger().warn('RecognizedFaceArray unavailable — face query disabled')
+
         # -- State --
         self._shutdown_event = threading.Event()
         self._wake_word_detector = None
@@ -132,6 +141,7 @@ class VoiceCommanderNode(Node):
         self._stt_actual_device = self._stt_device
         self._last_caption: str = ''
         self._last_yolo_description: str = ''
+        self._last_recognized_names: list = []   # names from /recognized_faces
         self._partial_text: str = ''  # set by early-exit capture, consumed in run_session
 
         # -- Load models --
@@ -499,12 +509,14 @@ class VoiceCommanderNode(Node):
     def _matches_any_intent(self, text: str) -> bool:
         """Quick check if text matches any known command — used for early-exit."""
         return (
-            is_what_do_you_see_command(text)
+            is_who_do_you_see_command(text)
+            or is_what_do_you_see_command(text)
             or is_describe_scene_command(text)
             or is_enable_command(text)
             or is_disable_command(text)
             or self._is_stop_command(text)
             or self._is_disable_voice_command(text)
+            or self._is_reacknowledge_command(text)
         )
 
     def _on_scene_caption(self, msg: String) -> None:
@@ -533,6 +545,12 @@ class VoiceCommanderNode(Node):
                 f'I see {", ".join(parts[:-1])}, and {parts[-1]}.'
             )
 
+    def _on_recognized_faces(self, msg) -> None:
+        """Cache the latest recognized (known) face names."""
+        self._last_recognized_names = [
+            f.name for f in msg.faces if f.name != 'unknown'
+        ]
+
     def _is_stop_command(self, text: str) -> bool:
         # Strip all punctuation so "Jarvis, stop." matches same as "Jarvis stop"
         import re
@@ -542,10 +560,42 @@ class VoiceCommanderNode(Node):
             "jarvis quit", "jarvis done", "jarvis bye",
         ])
 
+    def _is_reacknowledge_command(self, text: str) -> bool:
+        """True if the user is re-invoking Jarvis during an open session."""
+        import re
+        t = re.sub(r'[^\w\s]', '', text.lower().strip())
+        return t in {
+            'hey jarvis', 'jarvis', 'ok jarvis', 'okay jarvis', 'hi jarvis',
+        }
+
     def _dispatch_intent(self, text: str) -> bool:
         """Execute a voice command. Returns True if session should end."""
 
-        # 0a. "What do you see?" → YOLO object list (fast, always fresh)
+        # -1. Re-acknowledgment: user said "hey Jarvis" again during a session
+        if self._is_reacknowledge_command(text):
+            self.get_logger().info('Re-acknowledgment during session — responding Yes?')
+            self._pub_voice_state('speaking')
+            self._speak_and_wait("Yes?")
+            return False  # stay in session
+
+        # 0a-face. "Who do you see?" → face recognition results
+        if is_who_do_you_see_command(text):
+            names = list(dict.fromkeys(self._last_recognized_names))  # deduplicate, preserve order
+            if names:
+                if len(names) == 1:
+                    reply = f'I can see {names[0]}.'
+                elif len(names) == 2:
+                    reply = f'I can see {names[0]} and {names[1]}.'
+                else:
+                    reply = f'I can see {", ".join(names[:-1])}, and {names[-1]}.'
+            else:
+                reply = "I don't recognize anyone right now. Make sure Face ID is enabled and you're in frame."
+            self.get_logger().info(f'Who do you see → "{reply}"')
+            self._pub_voice_state('speaking')
+            self._speak_and_wait(reply)
+            return False  # stay in session
+
+        # 0b. "What do you see?" → YOLO object list (fast, always fresh)
         if is_what_do_you_see_command(text):
             if self._last_yolo_description:
                 self.get_logger().info(f'YOLO summary → "{self._last_yolo_description}"')
@@ -557,7 +607,7 @@ class VoiceCommanderNode(Node):
                 self._speak_and_wait("I don't see anything right now. Make sure vision is enabled.")
             return False  # stay in session
 
-        # 0b. "Give me more detail" → trigger fresh Florence-2 inference, then speak
+        # 0c. "Give me more detail" → trigger fresh Florence-2 inference, then speak
         if is_describe_scene_command(text):
             self.get_logger().info('Florence-2 on-demand triggered')
             prev_caption = self._last_caption

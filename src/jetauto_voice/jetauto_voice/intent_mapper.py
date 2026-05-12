@@ -385,6 +385,28 @@ def is_describe_scene_command(text: str) -> bool:
     )
 
 
+def is_who_do_you_see_command(text: str) -> bool:
+    """Return True if the user wants to know who the camera recognizes."""
+    t = text.lower().strip()
+    return any(
+        phrase in t
+        for phrase in [
+            "who do you see",
+            "who can you see",
+            "who's there",
+            "who is there",
+            "who are you looking at",
+            "who do you recognize",
+            "who is that",
+            "who am i",
+            "do you know me",
+            "do you recognize me",
+            "who's in front",
+            "who is in front",
+        ]
+    )
+
+
 def is_disable_command(text: str) -> bool:
     """Return True if the text matches a detection-disable voice command.
 

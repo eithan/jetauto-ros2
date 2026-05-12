@@ -312,6 +312,25 @@ html, body {
   font-size: 13px;
   border-radius: 10px;
 }
+.state-btn.loading {
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.4);
+  color: rgba(251, 191, 36, 0.85);
+  cursor: not-allowed;
+}
+.state-btn.loading:hover {
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.4);
+  box-shadow: none;
+}
+.spin {
+  display: inline-block;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
 
 .control-sep { width: 1px; height: 28px; background: var(--border); }
 
@@ -936,8 +955,9 @@ socket.on('state', (s) => {
   updateDetections(s.detections);
   voiceEnabled  = s.voice_enabled;
   visionEnabled = s.vision_enabled;
-  if (s.face_enabled !== undefined) {
-    faceEnabled = s.face_enabled;
+  if (s.face_enabled !== undefined || s.face_loading !== undefined) {
+    if (s.face_enabled !== undefined) faceEnabled = s.face_enabled;
+    if (s.face_loading !== undefined) faceLoading = s.face_loading;
     syncFaceToggle();
   }
   if (s.explore_running !== undefined) {
@@ -1267,15 +1287,26 @@ function updateRobotFaceState(state) {
 // ── Face ID Toggle ────────────────────────────────────
 
 let faceEnabled = false;
+let faceLoading = false;
 
 function toggleFaceID() {
+  if (faceLoading) return;  // block clicks while model is loading
   faceEnabled = !faceEnabled;
   syncFaceToggle();
   socket.emit('toggle_face', { enabled: faceEnabled });
 }
 
 function syncFaceToggle() {
-  document.getElementById('faceToggle').className = 'state-btn' + (faceEnabled ? ' on' : '');
+  const btn = document.getElementById('faceToggle');
+  if (faceLoading) {
+    btn.className = 'state-btn loading';
+    btn.innerHTML = '<span class="spin">⟳</span> Loading…';
+    btn.disabled = true;
+  } else {
+    btn.disabled = false;
+    btn.className = 'state-btn' + (faceEnabled ? ' on' : '');
+    btn.innerHTML = '👤 Face ID';
+  }
 }
 
 // ── Enrollment Modal ──────────────────────────────────

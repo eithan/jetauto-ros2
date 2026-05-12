@@ -79,6 +79,7 @@ class DashboardNode(Node):
             'explore_running': False,
             'explore_announce': True,   # TTS announcements for explore events (on by default)
             'face_enabled': False,
+            'face_loading': False,      # True while buffalo_l model is loading
             'enrollment_active': False,
             'enrollment_status': None,  # latest JSON payload from enrollment_node
         }
@@ -792,6 +793,7 @@ class DashboardNode(Node):
     def toggle_face(self, enabled: bool):
         """Enable or disable face recognition."""
         self.state['face_enabled'] = enabled
+        self.state['face_loading'] = enabled  # spinner until model is ready
         self._emit_state()
 
         if enabled:
@@ -800,6 +802,7 @@ class DashboardNode(Node):
             self._launch_face()
             threading.Thread(target=self._announce_face_enabled, daemon=True).start()
         else:
+            self.state['face_loading'] = False
             self._kill_face()
             self._maybe_kill_detector()
             self._maybe_kill_tts()
@@ -809,6 +812,9 @@ class DashboardNode(Node):
     def _announce_face_enabled(self):
         """Wait for the face model to load, then announce enrolled names."""
         time.sleep(15)  # buffalo_l takes ~10-15s on Orin Nano
+        # Clear loading spinner regardless of whether we're still enabled
+        self.state['face_loading'] = False
+        self._emit_state()
         if not self.state.get('face_enabled'):
             return  # was turned off while loading
         names = self._read_enrolled_names()
