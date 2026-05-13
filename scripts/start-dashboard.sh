@@ -57,6 +57,24 @@ if lsof -ti:${DASHBOARD_PORT} >/dev/null 2>&1; then
   done
 fi
 
+# ── Power mode ────────────────────────────────────────
+# The Jetson Orin Nano produces "System throttled due to Over-Current"
+# warnings when the GPU + CPU peak together and exceed the power rail limit.
+# Mode 0 = MAXN (15W, triggers throttling on the JetAuto battery supply).
+# Mode 1 = 7W (still fast enough for YOLO + Whisper, eliminates throttling).
+#
+# Switch to 7W mode at startup; change to 0 if your power supply can handle it.
+if command -v nvpmodel &>/dev/null; then
+  sudo nvpmodel -m 1 2>/dev/null && echo "⚡ Power mode set to 7W (nvpmodel -m 1)" || true
+fi
+
+# ── Audio setup ───────────────────────────────────────
+# Set system volume to 25%.  amixer covers ALSA; pactl covers PulseAudio.
+# Errors are silenced — whichever subsystem is active will work.
+amixer sset Master 25% 2>/dev/null || true
+pactl set-sink-volume @DEFAULT_SINK@ 25% 2>/dev/null || true
+echo "🔊 System volume set to 25%"
+
 # ── Check dependencies ────────────────────────────────
 python3 -c "import flask, flask_socketio" 2>/dev/null || {
   echo "📦 Installing Python dependencies..."

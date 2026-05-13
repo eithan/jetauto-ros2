@@ -75,10 +75,10 @@ class VoiceCommanderNode(Node):
         self.declare_parameter("mic_device_index", 1)
         self.declare_parameter("vad_aggressiveness", 2)
         self.declare_parameter("vad_speech_start_frames", 8)
-        self.declare_parameter("vad_speech_end_frames", 30)
+        self.declare_parameter("vad_speech_end_frames", 12)
         self.declare_parameter("vad_min_speech_ms", 250)
         self.declare_parameter("vad_listen_timeout_sec", 30.0)
-        self.declare_parameter("vad_max_duration_sec", 10.0)
+        self.declare_parameter("vad_max_duration_sec", 6.0)
         self.declare_parameter("wake_cooldown_sec", 5.0)
         self.declare_parameter("sample_rate", 16000)
         self.declare_parameter("session_timeout_sec", 300.0)
@@ -402,6 +402,9 @@ class VoiceCommanderNode(Node):
                 "what do you see, who do you see, start detection, or help."
             )
 
+        # Close signal — user knows to say wake word for the next command
+        self._pub_voice_state('speaking')
+        self._speak_and_wait("Done.")
         self._pub_voice_state('idle')
 
     # ================================================================== #
@@ -439,6 +442,12 @@ class VoiceCommanderNode(Node):
         # Early-exit: after this many speech frames, check for command match
         EARLY_CHECK_FRAMES = 30  # 30 × 20ms = 600ms of speech
         last_early_check = 0
+        # Per-frame RMS gate: WebRTC VAD fires on robot fan/motor noise because
+        # it detects periodicity, but real speech has much higher energy.
+        # Any frame that VAD marks as speech but has RMS below this threshold
+        # is treated as silence so the silence counter runs down normally.
+        # Typical fan noise: RMS < 0.003; typical speech: RMS 0.01 – 0.15.
+        _FRAME_RMS_MIN = 0.004
 
         for i in range(max_frames):
             if self._shutdown_event.is_set():
@@ -452,6 +461,13 @@ class VoiceCommanderNode(Node):
                 is_speech = vad.is_speech(flat.tobytes(), self._sample_rate)
             except Exception:
                 is_speech = False
+
+            # Energy gate: disqualify low-energy frames even if VAD fired
+            if is_speech:
+                flat_f32 = flat.astype(np.float32) / 32768.0
+                frame_rms = float(np.sqrt(np.mean(flat_f32 ** 2)))
+                if frame_rms < _FRAME_RMS_MIN:
+                    is_speech = False
 
             if is_speech:
                 speech_run += 1

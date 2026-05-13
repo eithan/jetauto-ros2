@@ -11,6 +11,11 @@
 # For shutdown button to work, ensure passwordless sudo for poweroff:
 #   echo "ubuntu ALL=(ALL) NOPASSWD: /sbin/poweroff" | sudo tee /etc/sudoers.d/jetauto-shutdown
 #
+# For power-mode tuning (eliminates "Over-Current" throttling warnings):
+#   echo "ubuntu ALL=(ALL) NOPASSWD: /usr/sbin/nvpmodel" | sudo tee /etc/sudoers.d/jetauto-nvpmodel
+# This allows start-dashboard.sh to set nvpmodel -m 1 (7W mode) at boot without a password.
+# To go back to max performance: sudo nvpmodel -m 0
+#
 # Logs:
 #   journalctl -u jetauto-dashboard -f
 
